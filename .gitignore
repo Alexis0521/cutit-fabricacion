@@ -1,0 +1,29 @@
+
+# Entorno virtual
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Variables de entorno y secretos
+.env
+.env.*
+
+# Permitir plantilla de configuración
+!.env.example
+
+# Pytest y cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Herramientas
+.ruff_cache/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

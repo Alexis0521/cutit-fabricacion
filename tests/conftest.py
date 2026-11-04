@@ -1,0 +1,9 @@
+import os
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("JWT_SECRET", "test-secret-that-is-long-enough")
+os.environ.setdefault("MATERIALES_BASE_URL", "http://materials")
+os.environ.setdefault("INVENTARIO_BASE_URL", "http://inventory")
+os.environ.setdefault("NOTIFICACIONES_BASE_URL", "http://notifications")
+os.environ.setdefault("CALLBACK_API_KEY", "test-key")
+os.environ.setdefault("API_PORT", "8000")
+os.environ.setdefault("EXTERNAL_MODE", "mock")
