@@ -2,8 +2,10 @@
 # Entorno virtual
 venv/
 .venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
 
 # Variables de entorno y secretos
 .env
@@ -25,6 +27,7 @@ htmlcov/
 # Sistema operativo
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # IDE
 .vscode/
@@ -33,3 +36,4 @@ Thumbs.db
 # Archivos temporales
 *.log
 *.tmp
+*.bak
