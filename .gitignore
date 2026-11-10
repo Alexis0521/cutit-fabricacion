@@ -15,10 +15,12 @@ __pycache__/
 # Pytest y cobertura
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # Herramientas
 .ruff_cache/
+.mypy_cache/
 
 # Sistema operativo
 .DS_Store
@@ -27,3 +29,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Archivos temporales
+*.log
+*.tmp

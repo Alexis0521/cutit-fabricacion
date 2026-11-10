@@ -1,4 +1,5 @@
 import os
+
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 os.environ.setdefault("JWT_SECRET", "test-secret-that-is-long-enough")
 os.environ.setdefault("MATERIALES_BASE_URL", "http://materials")

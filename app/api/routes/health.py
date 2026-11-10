@@ -6,7 +6,7 @@ router = APIRouter(tags=["Health"])
 
 
 @router.get("/health")
-def health():
+def health() -> dict[str, str]:
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
     return {"status": "ok"}
