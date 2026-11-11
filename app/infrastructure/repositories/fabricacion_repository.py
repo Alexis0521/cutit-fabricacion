@@ -1,6 +1,8 @@
 from uuid import UUID
-from sqlalchemy.orm import Session
+
 from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.domain.entities.fabricacion import Fabricacion
 from app.infrastructure.database.models import FabricacionModel
 
@@ -39,7 +41,7 @@ class FabricacionRepository:
         model = self.db.get(FabricacionModel, str(fabricacion_id))
         return self.to_entity(model) if model else None
 
-    def list(self, offset: int, limit: int, estado: str | None = None):
+    def list(self, offset: int, limit: int, estado: str | None = None) -> list[Fabricacion]:
         stmt = select(FabricacionModel)
         if estado:
             stmt = stmt.where(FabricacionModel.estado == estado)

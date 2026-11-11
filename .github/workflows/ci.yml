@@ -1,0 +1,43 @@
+
+name: CI - Fabricacion API
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy
+
+      - name: Revisar codigo con Ruff
+        run: ruff check app tests
+
+      - name: Revisar tipos con Mypy
+        run: mypy --disallow-untyped-defs app
+
+      - name: Ejecutar pruebas y medir cobertura
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+
+      - name: Construir imagen Docker
+        run: docker build -t cutit-fabricacion .

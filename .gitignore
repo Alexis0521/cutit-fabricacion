@@ -2,8 +2,10 @@
 # Entorno virtual
 venv/
 .venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
 
 # Variables de entorno y secretos
 .env
@@ -15,15 +17,23 @@ __pycache__/
 # Pytest y cobertura
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # Herramientas
 .ruff_cache/
+.mypy_cache/
 
 # Sistema operativo
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # IDE
 .vscode/
 .idea/
+
+# Archivos temporales
+*.log
+*.tmp
+*.bak

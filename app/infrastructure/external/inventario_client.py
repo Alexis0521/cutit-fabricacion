@@ -1,4 +1,5 @@
 import httpx
+
 from app.core.config import settings
 
 
@@ -15,7 +16,9 @@ class InventarioClient:
             payload = response.json()
             return payload.get("faltantes", [])
 
-    async def descontar(self, fabricacion_id: str, referencia: str, formula: dict, cantidad: int) -> None:
+    async def descontar(
+        self, fabricacion_id: str, referencia: str, formula: dict | None, cantidad: int
+    ) -> None:
         if settings.external_mode == "mock":
             return
         async with httpx.AsyncClient(timeout=settings.external_timeout_seconds) as client:
