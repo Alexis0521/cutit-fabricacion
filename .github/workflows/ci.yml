@@ -37,7 +37,7 @@ jobs:
         run: mypy --disallow-untyped-defs app
 
       - name: Ejecutar pruebas y medir cobertura
-        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 
       - name: Construir imagen Docker
         run: docker build -t cutit-fabricacion .
