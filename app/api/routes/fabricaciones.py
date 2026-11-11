@@ -1,5 +1,7 @@
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query
+
 from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
