@@ -1,12 +1,18 @@
+from collections.abc import Callable
+from typing import Any
+
+import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import jwt
+
 from app.core.config import settings
 
 bearer = HTTPBearer(auto_error=False)
 
 
-def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict:
+def current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict[str, Any]:
     if credentials is None:
         raise HTTPException(status_code=401, detail="Token requerido")
     try:
@@ -23,8 +29,8 @@ def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bear
     return payload
 
 
-def require_roles(*roles: str):
-    def dependency(user: dict = Depends(current_user)) -> dict:
+def require_roles(*roles: str) -> Callable[..., dict[str, Any]]:
+    def dependency(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
         if user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Permisos insuficientes")
         return user

@@ -1,5 +1,6 @@
 import pytest
 from pydantic import ValidationError
+
 from app.application.schemas.fabricacion_schema import FabricacionCreate
 
 

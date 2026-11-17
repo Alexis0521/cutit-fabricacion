@@ -1,13 +1,16 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from app.infrastructure.database.connection import Base, engine
-from app.infrastructure.database import models  # noqa: F401
-from app.api.routes import fabricaciones, notificaciones, health
+
+from app.api.routes import fabricaciones, health, notificaciones
 from app.core.exceptions import register_exception_handlers
+from app.infrastructure.database import models  # noqa: F401
+from app.infrastructure.database.connection import Base, engine
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Bootstrap convenience for the basic archetype. Use Alembic migrations in managed environments.
     Base.metadata.create_all(bind=engine)
     yield

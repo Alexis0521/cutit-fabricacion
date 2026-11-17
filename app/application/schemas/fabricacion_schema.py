@@ -1,7 +1,13 @@
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict
-from app.domain.enums.estados import TipoProducto, EstadoFabricacion, EstadoSincronizacion
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.domain.enums.estados import (
+    EstadoFabricacion,
+    EstadoSincronizacion,
+    TipoProducto,
+)
 
 
 class FabricacionCreate(BaseModel):
