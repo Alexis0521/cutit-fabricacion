@@ -21,4 +21,4 @@ class Settings(BaseSettings):
         return {"FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"}
 
 
-settings = Settings()
+settings = Settings() # type: ignore[call-arg]

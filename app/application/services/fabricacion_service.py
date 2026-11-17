@@ -1,11 +1,14 @@
 from uuid import UUID
+
+import httpx
 from sqlalchemy.orm import Session
+
+from app.application.schemas.fabricacion_schema import FabricacionCreate
 from app.core.exceptions import DomainError
 from app.domain.entities.fabricacion import Fabricacion
-from app.application.schemas.fabricacion_schema import FabricacionCreate
-from app.infrastructure.repositories.fabricacion_repository import FabricacionRepository
-from app.infrastructure.external.materiales_client import MaterialesClient
 from app.infrastructure.external.inventario_client import InventarioClient
+from app.infrastructure.external.materiales_client import MaterialesClient
+from app.infrastructure.repositories.fabricacion_repository import FabricacionRepository
 
 
 class FabricacionService:
@@ -22,7 +25,7 @@ class FabricacionService:
         entity = Fabricacion(**data.model_dump())
         return self.repo.save(entity)
 
-    async def validar(self, fabricacion_id: UUID):
+    async def validar(self, fabricacion_id: UUID) -> tuple[Fabricacion, list[dict]]:
         entity = self._get(fabricacion_id)
         faltantes = await self.inventario.consultar_disponibilidad(
             entity.referencia_material, {}, entity.cantidad
@@ -32,13 +35,13 @@ class FabricacionService:
         entity.validar()
         return self.repo.save(entity), []
 
-    async def iniciar(self, fabricacion_id: UUID):
+    async def iniciar(self, fabricacion_id: UUID) -> Fabricacion:
         entity = self._get(fabricacion_id)
         formula = await self.materiales.obtener_formula(entity.referencia_material)
         entity.iniciar(formula)
         return self.repo.save(entity)
 
-    async def formula(self, fabricacion_id: UUID):
+    async def formula(self, fabricacion_id: UUID) -> dict:
         entity = self._get(fabricacion_id)
         if entity.estado.value not in {"En Proceso", "Cerrada"}:
             raise DomainError("La fórmula solo está disponible durante o después de la fabricación", 409)
@@ -47,7 +50,7 @@ class FabricacionService:
             raise DomainError("La fórmula está incompleta", 409)
         return formula
 
-    async def cerrar(self, fabricacion_id: UUID):
+    async def cerrar(self, fabricacion_id: UUID) -> Fabricacion:
         entity = self._get(fabricacion_id)
         entity.cerrar()
         self.repo.save(entity)
@@ -56,11 +59,11 @@ class FabricacionService:
                 str(entity.id), entity.referencia_material, entity.formula_snapshot, entity.cantidad
             )
             entity.marcar_cerrada()
-        except Exception:
+        except httpx.HTTPError:
             entity.marcar_no_sincronizada()
         return self.repo.save(entity)
 
-    async def sincronizar(self, fabricacion_id: UUID):
+    async def sincronizar(self, fabricacion_id: UUID) -> Fabricacion:
         entity = self._get(fabricacion_id)
         if entity.sincronizacion.value != "No Sincronizado":
             raise DomainError("La orden no requiere sincronización", 409)
@@ -70,13 +73,13 @@ class FabricacionService:
         entity.marcar_cerrada()
         return self.repo.save(entity)
 
-    def obtener(self, fabricacion_id: UUID):
+    def obtener(self, fabricacion_id: UUID) -> Fabricacion:
         return self._get(fabricacion_id)
 
-    def listar(self, page: int, estado: str | None):
+    def listar(self, page: int, estado: str | None) -> list[Fabricacion]:
         return self.repo.list((page - 1) * 20, 20, estado)
 
-    def _get(self, fabricacion_id: UUID):
+    def _get(self, fabricacion_id: UUID) -> Fabricacion:
         entity = self.repo.get(fabricacion_id)
         if entity is None:
             raise DomainError("Fabricación no encontrada", 404)

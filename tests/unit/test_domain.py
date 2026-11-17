@@ -1,7 +1,12 @@
 import pytest
-from app.domain.entities.fabricacion import Fabricacion
-from app.domain.enums.estados import TipoProducto, EstadoFabricacion, EstadoSincronizacion
+
 from app.core.exceptions import DomainError
+from app.domain.entities.fabricacion import Fabricacion
+from app.domain.enums.estados import (
+    EstadoFabricacion,
+    EstadoSincronizacion,
+    TipoProducto,
+)
 
 
 def make_order():
