@@ -58,3 +58,16 @@ jobs:
           tags: |
             alexis2105/cutit-fabricacion:latest
             alexis2105/cutit-fabricacion:${{ github.sha }}
+      
+  deploy-production:
+    name: Deploy to AWS EC2
+    runs-on: self-hosted
+    needs: quality-and-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Actualizar API en EC2
+        run: |
+          cd /home/ubuntu/cutit-fabricacion-repo
+          docker compose pull api
+          docker compose up -d --no-deps api
