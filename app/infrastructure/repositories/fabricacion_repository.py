@@ -1,23 +1,33 @@
-from uuid import UUID
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.entities.fabricacion import Fabricacion
-from app.infrastructure.database.models import FabricacionModel
+from app.infrastructure.database.models import FabricacionModel, SecuenciaOrdenModel
 
 
 class FabricacionRepository:
     def __init__(self, db: Session):
         self.db = db
 
+    def siguiente_id(self) -> str:
+        """Reserva el siguiente consecutivo (único, atómico y sin reutilización)."""
+        secuencia = SecuenciaOrdenModel()
+        self.db.add(secuencia)
+        self.db.flush()
+        return f"ORD-{secuencia.numero:06d}"
+
     def save(self, entity: Fabricacion) -> Fabricacion:
-        model = self.db.get(FabricacionModel, str(entity.id))
+        if not entity.id:
+            entity.id = self.siguiente_id()
+        model = self.db.get(FabricacionModel, entity.id)
         data = {
             "referencia_material": entity.referencia_material,
             "tipo_producto": entity.tipo_producto,
             "cantidad": entity.cantidad,
             "observaciones": entity.observaciones,
+            "fabricante_id": entity.fabricante_id,
+            "especificaciones_tecnicas": entity.especificaciones_tecnicas,
+            "insumos_terceros": entity.insumos_terceros or [],
             "estado": entity.estado,
             "sincronizacion": entity.sincronizacion,
             "formula_version": entity.formula_version,
@@ -26,9 +36,10 @@ class FabricacionRepository:
             "started_at": entity.started_at,
             "closed_at": entity.closed_at,
             "sync_attempts": entity.sync_attempts,
+            "especificaciones": entity.especificaciones,
         }
         if model is None:
-            model = FabricacionModel(id=str(entity.id), **data)
+            model = FabricacionModel(id=entity.id, **data)
             self.db.add(model)
         else:
             for key, value in data.items():
@@ -37,8 +48,8 @@ class FabricacionRepository:
         self.db.refresh(model)
         return self.to_entity(model)
 
-    def get(self, fabricacion_id: UUID) -> Fabricacion | None:
-        model = self.db.get(FabricacionModel, str(fabricacion_id))
+    def get(self, fabricacion_id: str) -> Fabricacion | None:
+        model = self.db.get(FabricacionModel, fabricacion_id)
         return self.to_entity(model) if model else None
 
     def list(self, offset: int, limit: int, estado: str | None = None) -> list[Fabricacion]:
@@ -55,7 +66,11 @@ class FabricacionRepository:
             tipo_producto=model.tipo_producto,
             cantidad=model.cantidad,
             observaciones=model.observaciones,
-            id=UUID(model.id),
+            fabricante_id=model.fabricante_id,
+            especificaciones_tecnicas=model.especificaciones_tecnicas,
+            id=model.id,
+            especificaciones=model.especificaciones or {},
+            insumos_terceros=model.insumos_terceros or [],
         )
         entity.estado = model.estado
         entity.sincronizacion = model.sincronizacion

@@ -17,6 +17,8 @@ from app.domain.enums.estados import (
 )
 from app.main import app
 
+ID_ORDEN = "ORD-000123"
+
 
 @pytest.fixture
 def api_client():
@@ -35,17 +37,19 @@ def make_fabricacion(
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA,
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE,
     formula_snapshot: dict | None = None,
+    fabricante_id: str | None = None,
 ) -> Fabricacion:
     return Fabricacion(
         referencia_material="MAT-1",
         tipo_producto=TipoProducto.CADENA,
         cantidad=3,
         observaciones="Orden urgente",
-        id=uuid4(),
+        id="ORD-000123",
         estado=estado,
         sincronizacion=sincronizacion,
         formula_version="2" if formula_snapshot else None,
         formula_snapshot=formula_snapshot,
+        fabricante_id=fabricante_id,
     )
 
 
@@ -66,95 +70,458 @@ def fabricacion_json(entity: Fabricacion) -> dict:
         "started_at": serialize_datetime(entity.started_at) if entity.started_at else None,
         "closed_at": serialize_datetime(entity.closed_at) if entity.closed_at else None,
         "sync_attempts": entity.sync_attempts,
+        "especificaciones": entity.especificaciones,
+        "insumos_terceros": entity.insumos_terceros,
     }
 
 
-def test_registrar_returns_created_fabricacion(api_client):
+PAYLOAD_VALIDO = {
+    "tipoProducto": "Cadena",
+    "referenciaProducto": "CAD-3/8-050",
+    "cantidad": 20,
+    "especificaciones": {"paso": "3/8", "calibre": "0.050"},
+    "insumosTerceros": [{"tipo": "Motosierra", "cantidad": 20}],
+    "observaciones": "texto",
+}
+
+
+@pytest.fixture
+def fabricante_client(api_client):
     client, service = api_client
-    entity = make_fabricacion()
-    service.registrar.return_value = entity
-    payload = {
-        "referencia_material": "MAT-1",
-        "tipo_producto": "Cadena",
-        "cantidad": 3,
-        "observaciones": "Orden urgente",
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-1",
     }
+    return client, service
 
-    response = client.post("/fabricaciones", json=payload)
+
+def test_registrar_devuelve_201_con_id_y_estado(fabricante_client):
+    client, service = fabricante_client
+    service.registrar.return_value = make_fabricacion()
+
+    response = client.post("/fabricaciones", json=PAYLOAD_VALIDO)
 
     assert response.status_code == 201
-    assert response.json() == fabricacion_json(entity)
-    service.registrar.assert_awaited_once()
-    assert service.registrar.await_args.args[0].model_dump() == {
-        **payload,
-        "tipo_producto": TipoProducto.CADENA,
+    assert response.json() == {
+        "mensaje": "Orden de fabricación registrada correctamente",
+        "id": "ORD-000123",
+        "estado": "Registrada",
     }
+    entrada = service.registrar.await_args.args[0]
+    assert entrada.tipo_producto == "Cadena"
+    assert entrada.referencia_material == "CAD-3/8-050"
+    assert entrada.especificaciones == {"paso": "3/8", "calibre": "0.050"}
+    assert entrada.insumos_terceros == [{"tipo": "Motosierra", "cantidad": 20}]
+
+
+def test_registrar_assigns_order_to_authenticated_manufacturer(api_client):
+    client, service = api_client
+    service.registrar.return_value = make_fabricacion(fabricante_id="fab-1")
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-1",
+    }
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+            "fabricante_id": "fab-otro",
+        },
+    )
+
+    assert response.status_code == 201
+    assert service.registrar.await_args.args[0].model_dump().get(
+        "fabricante_id"
+    ) is None
+    assert service.registrar.await_args.kwargs["fabricante_id"] == "fab-1"
+
+
+def test_gerente_cannot_assign_unverified_manufacturer_when_registering(api_client):
+    client, service = api_client
+    service.registrar.return_value = make_fabricacion()
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+            "fabricante_id": "fab-1",
+        },
+    )
+
+    assert response.status_code == 201
+    assert service.registrar.await_args.args[0].model_dump().get(
+        "fabricante_id"
+    ) is None
+    assert service.registrar.await_args.kwargs["fabricante_id"] is None
+
+
+def test_manufacturer_without_subject_cannot_register_order(api_client):
+    client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE"
+    }
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+        },
+    )
+
+    assert response.status_code == 403
+    service.registrar.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"referencia_material": "MAT-1", "tipo_producto": "Cadena", "cantidad": 0},
-        {"referencia_material": "MAT-1", "tipo_producto": "No existe", "cantidad": 1},
-        {"tipo_producto": "Cadena", "cantidad": 1},
+        {"cantidad": 5},
+        {"especificaciones": {"paso": "3/8"}},
+        {"especificaciones_tecnicas": "Acero inoxidable"},
+        {"insumos_terceros": [{"nombre": "Tornillo", "cantidad": 4}]},
+        {"observaciones": "Prioridad alta"},
     ],
 )
-def test_registrar_rejects_invalid_payload(api_client, payload):
+def test_modificar_acepta_campos_editables(api_client, payload):
+    client, service = api_client
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service.modificar.return_value = entity
+
+    response = client.patch(
+        f"/fabricaciones/{entity.id}",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mensaje": "Orden de fabricación modificada correctamente",
+        "id": str(entity.id),
+        "estado": "Validada",
+    }
+    service.modificar.assert_called_once()
+    assert service.modificar.call_args.args[0] == entity.id
+    assert service.modificar.call_args.args[1].model_dump(
+        exclude_unset=True
+    ) == payload
+
+
+def test_modificar_permite_fabricante_autenticado(api_client):
+    client, service = api_client
+    entity = make_fabricacion()
+    service.modificar.return_value = entity
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-1",
+    }
+
+    response = client.patch(
+        f"/fabricaciones/{entity.id}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 200
+    service.modificar.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "campo",
+    ["id", "tipo_producto", "referencia_material", "referencia_producto"],
+)
+def test_modificar_rechaza_campos_no_modificables(api_client, campo):
     client, service = api_client
 
-    response = client.post("/fabricaciones", json=payload)
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={campo: "no modificable"},
+    )
 
     assert response.status_code == 422
-    assert response.json()["detail"]
-    service.registrar.assert_not_awaited()
+    service.modificar.assert_not_called()
 
 
-def test_registrar_maps_service_domain_error(api_client):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"cantidad": 0},
+        {"cantidad": True},
+        {"cantidad": 2.5},
+        {"cantidad": None},
+        {"especificaciones_tecnicas": ""},
+        {"especificaciones_tecnicas": "   "},
+        {"especificaciones_tecnicas": None},
+        {"insumos_terceros": "no es una lista"},
+        {"observaciones": "x" * 251},
+    ],
+)
+def test_modificar_rechaza_body_vacio_y_datos_invalidos(api_client, payload):
     client, service = api_client
-    service.registrar.side_effect = DomainError("Fórmula no aprobada", 409)
 
-    response = client.post(
-        "/fabricaciones",
-        json={"referencia_material": "MAT-1", "tipo_producto": "Cadena", "cantidad": 1},
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    service.modificar.assert_not_called()
+
+
+def test_modificar_orden_inexistente_devuelve_404(api_client):
+    client, service = api_client
+    service.modificar.side_effect = DomainError(
+        "Fabricación no encontrada",
+        404,
+    )
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 404
+
+
+def test_modificar_estado_no_permitido_devuelve_409(api_client):
+    client, service = api_client
+    service.modificar.side_effect = DomainError(
+        "Solo se pueden modificar órdenes Registradas o Validadas",
+        409,
+    )
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Fórmula no aprobada"}
+
+
+@pytest.mark.parametrize(
+    "rol",
+    ["ENCARGADO_ENSAMBLE", "SIN_PERMISOS"],
+)
+def test_modificar_rechaza_rol_sin_permisos(api_client, rol):
+    client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {"role": rol}
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 403
+    service.modificar.assert_not_called()
+
+
+def test_modificar_sin_credenciales_devuelve_401(api_client):
+    client, service = api_client
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 401
+    service.modificar.assert_not_called()
+
+
+def test_modificar_error_inesperado_devuelve_500(api_client):
+    client, service = api_client
+    service.modificar.side_effect = RuntimeError("Error inesperado")
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "mensaje"),
+    [
+        (422, "El tipo de producto no es válido"),
+        (409, "La fórmula de la referencia aún no está aprobada"),
+        (503, "El módulo de Materiales no está disponible por el momento"),
+    ],
+)
+def test_registrar_traduce_errores_de_dominio(fabricante_client, status, mensaje):
+    client, service = fabricante_client
+    service.registrar.side_effect = DomainError(mensaje, status)
+
+    response = client.post("/fabricaciones", json=PAYLOAD_VALIDO)
+
+    assert response.status_code == status
+    assert response.json() == {"detail": mensaje}
+
+
+def test_registrar_incluye_los_datos_faltantes_en_la_respuesta(fabricante_client):
+    client, service = fabricante_client
+    faltantes = [{"campo": "cantidad", "mensaje": "El campo cantidad es obligatorio"}]
+    service.registrar.side_effect = DomainError(
+        "Faltan datos obligatorios", 422, {"faltantes": faltantes}
+    )
+
+    response = client.post("/fabricaciones", json={"tipoProducto": "Cadena"})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Faltan datos obligatorios", "faltantes": faltantes}
+
+
+def test_registrar_error_inesperado_devuelve_500(fabricante_client):
+    client, service = fabricante_client
+    service.registrar.side_effect = RuntimeError("boom")
+
+    response = client.post("/fabricaciones", json=PAYLOAD_VALIDO)
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
+
+
+@pytest.mark.parametrize("role", ["ENCARGADO_ENSAMBLE", "SIN_PERMISOS"])
+def test_registrar_rechaza_roles_distintos_de_fabricante(api_client, role):
+    client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {"role": role}
+
+    response = client.post("/fabricaciones", json=PAYLOAD_VALIDO)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "No tiene autorización para realizar esta operación"}
+    service.registrar.assert_not_awaited()
+
+
+def test_registrar_sin_credenciales_devuelve_401():
+    app.dependency_overrides.clear()
+
+    response = TestClient(app).post("/fabricaciones", json=PAYLOAD_VALIDO)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Acceso no autorizado"}
 
 
 def test_validar_returns_available_result(api_client):
     client, service = api_client
-    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA
+    )
+
     service.validar.return_value = (entity, [])
 
-    response = client.post(f"/fabricaciones/{entity.id}/validacion")
+    response = client.post(
+        f"/fabricaciones/{entity.id}/validacion"
+    )
 
     assert response.status_code == 200
-    assert response.json() == {"disponible": True, "faltantes": []}
+
+    assert response.json() == {
+        "mensaje": "Materiales disponibles: la orden puede iniciar su fabricación",
+        "id": str(entity.id),
+        "estado": "Validada",
+    }
+
     service.validar.assert_awaited_once_with(entity.id)
 
 
 def test_validar_returns_missing_inventory_items(api_client):
     client, service = api_client
+
     entity = make_fabricacion()
+
     missing = {
-        "codigo": "ACERO",
-        "descripcion": "Acero",
-        "requerido": 10.0,
-        "disponible": 7.0,
-        "diferencia": 3.0,
+        "codigoMaterial": "MP-001",
+        "requerido": 5000,
+        "disponible": 3200,
+        "faltante": 1800,
     }
+
     service.validar.return_value = (entity, [missing])
 
-    response = client.post(f"/fabricaciones/{entity.id}/validacion")
+    response = client.post(
+        f"/fabricaciones/{entity.id}/validacion"
+    )
 
-    assert response.status_code == 200
-    assert response.json() == {"disponible": False, "faltantes": [missing]}
+    assert response.status_code == 409
+
+    assert response.json() == {
+        "detail": "Materiales insuficientes para fabricar la orden",
+        "faltantes": [missing],
+    }
+
+
+def test_validar_rechaza_estado_incorrecto(api_client):
+    client, service = api_client
+
+    service.validar.side_effect = DomainError(
+        "Solo se pueden validar órdenes en estado Registrada",
+        409,
+    )
+
+    response = client.post(
+        f"/fabricaciones/{ID_ORDEN}/validacion"
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Solo se pueden validar órdenes en estado Registrada"
+    }
+
+
+@pytest.mark.parametrize(
+    "modulo",
+    ["Materiales", "Inventario"],
+)
+def test_validar_modulo_no_disponible(api_client, modulo):
+    client, service = api_client
+
+    mensaje = (
+        f"El módulo de {modulo} no está disponible por el momento"
+    )
+
+    service.validar.side_effect = DomainError(mensaje, 503)
+
+    response = client.post(
+        f"/fabricaciones/{ID_ORDEN}/validacion"
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": mensaje}
+
+
+def test_validar_error_inesperado(api_client):
+    client, service = api_client
+
+    service.validar.side_effect = RuntimeError(
+        "Error inesperado"
+    )
+
+    response = client.post(
+        f"/fabricaciones/{ID_ORDEN}/validacion"
+    )
+
+    assert response.status_code == 500
+
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
 
 
 def test_validar_maps_missing_fabricacion_to_404(api_client):
     client, service = api_client
-    fabricacion_id = uuid4()
+    fabricacion_id = ID_ORDEN
     service.validar.side_effect = DomainError("Fabricación no encontrada", 404)
 
     response = client.post(f"/fabricaciones/{fabricacion_id}/validacion")
@@ -174,13 +541,19 @@ def test_iniciar_returns_updated_fabricacion(api_client):
     response = client.patch(f"/fabricaciones/{entity.id}/inicio")
 
     assert response.status_code == 200
-    assert response.json() == fabricacion_json(entity)
-    service.iniciar.assert_awaited_once_with(entity.id)
+    assert response.json() == {
+        **fabricacion_json(entity),
+        "mensaje": "La orden quedó en producción",
+    }
+    service.iniciar.assert_awaited_once_with(
+        entity.id,
+        {"role": "GERENTE_FABRICACION"},
+    )
 
 
 def test_iniciar_returns_service_conflict(api_client):
     client, service = api_client
-    entity_id = uuid4()
+    entity_id = ID_ORDEN
     service.iniciar.side_effect = DomainError("Solo se pueden iniciar órdenes Validadas", 409)
 
     response = client.patch(f"/fabricaciones/{entity_id}/inicio")
@@ -189,10 +562,85 @@ def test_iniciar_returns_service_conflict(api_client):
     assert response.json() == {"detail": "Solo se pueden iniciar órdenes Validadas"}
 
 
-def test_formula_returns_formula_snapshot(api_client):
+def test_iniciar_maps_missing_order_to_404(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = DomainError("Fabricación no encontrada", 404)
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Fabricación no encontrada"}
+
+
+def test_iniciar_maps_materiales_unavailable_to_503(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = DomainError(
+        "El módulo de Materiales no está disponible por el momento",
+        503,
+    )
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "El módulo de Materiales no está disponible por el momento"
+    }
+
+
+def test_iniciar_maps_unexpected_error_to_500(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = RuntimeError("Error interno")
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
+
+
+def test_iniciar_rechaza_fabricante_no_asignado(api_client):
     client, service = api_client
     entity_id = uuid4()
-    formula = {"version": "2", "items": [{"codigo": "ACERO", "cantidad": 10}]}
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-2",
+    }
+    service.iniciar.side_effect = DomainError(
+        "Solo el fabricante asignado puede iniciar esta orden",
+        403,
+    )
+
+    response = client.patch(f"/fabricaciones/{entity_id}/inicio")
+
+    assert response.status_code == 403
+    service.iniciar.assert_awaited_once_with(
+        str(entity_id),
+        {"role": "FABRICANTE", "sub": "fab-2"},
+    )
+
+
+def test_formula_returns_current_formula(api_client):
+    client, service = api_client
+
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE"
+    }
+
+    entity_id = ID_ORDEN
+
+    formula = {
+        "referenciaProducto": "MAT-1",
+        "insumos": [
+            {
+                "codigoMaterial": "MP-001",
+                "descripcion": "Acero",
+                "cantidadPorUnidad": 250.5,
+                "unidadMedida": "g",
+            }
+        ],
+    }
+
     service.formula.return_value = formula
 
     response = client.get(f"/fabricaciones/{entity_id}/formula")
@@ -204,7 +652,10 @@ def test_formula_returns_formula_snapshot(api_client):
 
 def test_formula_returns_service_conflict_for_unavailable_formula(api_client):
     client, service = api_client
-    entity_id = uuid4()
+    app.dependency_overrides[current_user] = lambda: {
+    "role": "FABRICANTE"
+    }
+    entity_id = ID_ORDEN
     service.formula.side_effect = DomainError("La fórmula está incompleta", 409)
 
     response = client.get(f"/fabricaciones/{entity_id}/formula")
@@ -231,7 +682,7 @@ def test_cerrar_returns_closed_fabricacion(api_client):
 
 def test_cerrar_returns_service_conflict(api_client):
     client, service = api_client
-    entity_id = uuid4()
+    entity_id = ID_ORDEN
     service.cerrar.side_effect = DomainError("Solo se pueden cerrar órdenes En Proceso", 409)
 
     response = client.post(f"/fabricaciones/{entity_id}/cierre")
@@ -258,7 +709,7 @@ def test_sincronizar_returns_synchronized_fabricacion(api_client):
 
 def test_sincronizar_returns_not_found_for_missing_fabricacion(api_client):
     client, service = api_client
-    entity_id = uuid4()
+    entity_id = ID_ORDEN
     service.sincronizar.side_effect = DomainError("Fabricación no encontrada", 404)
 
     response = client.post(f"/fabricaciones/{entity_id}/sincronizacion")
@@ -312,7 +763,7 @@ def test_detalle_returns_fabricacion(api_client):
 
 def test_detalle_returns_not_found_for_missing_fabricacion(api_client):
     client, service = api_client
-    entity_id = uuid4()
+    entity_id = ID_ORDEN
     service.obtener.side_effect = DomainError("Fabricación no encontrada", 404)
 
     response = client.get(f"/fabricaciones/{entity_id}")
@@ -324,7 +775,7 @@ def test_detalle_returns_not_found_for_missing_fabricacion(api_client):
 def test_endpoints_reject_invalid_fabricacion_id(api_client):
     client, service = api_client
 
-    response = client.get("/fabricaciones/no-es-un-uuid")
+    response = client.get("/fabricaciones/no-es-un-id")
 
     assert response.status_code == 422
     service.obtener.assert_not_called()
@@ -334,8 +785,103 @@ def test_endpoint_enforces_role_permissions(api_client):
     client, service = api_client
     app.dependency_overrides[current_user] = lambda: {"role": "FABRICANTE"}
 
-    response = client.post(f"/fabricaciones/{uuid4()}/sincronizacion")
+    response = client.post(f"/fabricaciones/{ID_ORDEN}/sincronizacion")
 
     assert response.status_code == 403
-    assert response.json() == {"detail": "Permisos insuficientes"}
+    assert response.json() == {
+        "detail": "No tiene autorización para realizar esta operación"
+    }
     service.sincronizar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+        ("PATCH", "inicio"),
+    ],
+)
+def test_hu03_hu04_rechazan_acceso_sin_credenciales(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{ID_ORDEN}/{endpoint}",
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Acceso no autorizado"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+        ("PATCH", "inicio"),
+    ],
+)
+def test_hu03_hu04_rechazan_token_invalido(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{ID_ORDEN}/{endpoint}",
+        headers={"Authorization": "Bearer token-invalido"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Acceso no autorizado"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+        ("PATCH", "inicio"),
+    ],
+)
+def test_hu03_hu04_rechazan_rol_no_autorizado(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "SIN_PERMISOS"
+    }
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{ID_ORDEN}/{endpoint}",
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "No tiene autorización para realizar esta operación"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()

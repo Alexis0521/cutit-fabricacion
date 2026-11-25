@@ -14,7 +14,11 @@ def current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> dict[str, Any]:
     if credentials is None:
-        raise HTTPException(status_code=401, detail="Token requerido")
+        raise HTTPException(
+            status_code=401,
+            detail="Acceso no autorizado",
+        )
+
     try:
         payload = jwt.decode(
             credentials.credentials,
@@ -22,16 +26,31 @@ def current_user(
             algorithms=[settings.jwt_algorithm],
         )
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Token inválido") from exc
+        raise HTTPException(
+            status_code=401,
+            detail="Acceso no autorizado",
+        ) from exc
+
     role = payload.get("role")
+
     if role not in settings.allowed_roles:
-        raise HTTPException(status_code=403, detail="Rol no autorizado")
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene autorización para realizar esta operación",
+        )
+
     return payload
 
 
 def require_roles(*roles: str) -> Callable[..., dict[str, Any]]:
-    def dependency(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    def dependency(
+        user: dict[str, Any] = Depends(current_user),
+    ) -> dict[str, Any]:
         if user.get("role") not in roles:
-            raise HTTPException(status_code=403, detail="Permisos insuficientes")
+            raise HTTPException(
+                status_code=403,
+                detail="No tiene autorización para realizar esta operación",
+            )
         return user
+
     return dependency

@@ -55,9 +55,12 @@ La API espera un JWT firmado con `JWT_SECRET` y `JWT_ALGORITHM`. El token debe i
 
 La emisión y renovación de tokens corresponde al proveedor central de identidad, fuera del alcance de este módulo.
 
+El claim `sub` identifica al usuario. Al registrar una orden, un `FABRICANTE` queda asignado automáticamente a ella mediante su `sub`; el campo `fabricante_id` del body no se utiliza para asignar identidades. Como no hay un servicio confiable para verificar otros fabricantes, las órdenes registradas por un `GERENTE_FABRICACION` quedan sin fabricante asignado. El gerente puede iniciar cualquier orden validada; un fabricante solo puede iniciar órdenes asignadas a su `sub`.
+
 ## Endpoints principales
 
 - `POST /fabricaciones`
+- `PATCH /fabricaciones/{id}`
 - `POST /fabricaciones/{id}/validacion`
 - `PATCH /fabricaciones/{id}/inicio`
 - `GET /fabricaciones/{id}/formula`
@@ -67,6 +70,8 @@ La emisión y renovación de tokens corresponde al proveedor central de identida
 - `GET /fabricaciones/{id}`
 - `POST /fabricaciones/desde-notificacion` (requiere `X-API-Key`)
 - `GET /health`
+
+La modificación de órdenes acepta cantidad, especificaciones técnicas, insumos de terceros y observaciones. Las órdenes validadas regresan a Registrada si cambian datos que requieren revalidación; cambiar solo observaciones conserva el estado.
 
 ## Decisiones y limitaciones conocidas
 

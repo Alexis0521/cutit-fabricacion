@@ -1,53 +1,189 @@
-from uuid import UUID
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
+    FabricacionRegistrada,
+    FabricacionUpdate,
+    FormulaRead,
+    InicioResult,
+    ModificacionResult,
+    ValidacionError,
     ValidacionResult,
 )
 from app.application.services.fabricacion_service import FabricacionService
+from app.core.exceptions import DomainError
 from app.core.security import require_roles
 from app.domain.entities.fabricacion import Fabricacion
 
 router = APIRouter(prefix="/fabricaciones", tags=["Fabricaciones"])
 
-
-@router.post("", response_model=FabricacionRead, status_code=201)
-async def registrar(data: FabricacionCreate, service: FabricacionService = Depends(get_fabricacion_service),
-                    _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
-    return await service.registrar(data)
-
-
-@router.post("/{fabricacion_id}/validacion", response_model=ValidacionResult)
-async def validar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> dict[str, bool | list[dict]]:
-    _fabricacion, faltantes = await service.validar(fabricacion_id)
-    return {"disponible": not faltantes, "faltantes": faltantes}
+OrdenId = Annotated[
+    str,
+    Path(
+        pattern=(
+            r"^(?:ORD-\d{6,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+        ),
+        description="Ej.: ORD-000123",
+    ),
+]
 
 
-@router.patch("/{fabricacion_id}/inicio", response_model=FabricacionRead)
-async def iniciar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
-    return await service.iniciar(fabricacion_id)
+@router.post("", response_model=FabricacionRegistrada, status_code=201)
+async def registrar(
+    data: FabricacionCreate,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    usuario: dict = Depends(
+        require_roles("FABRICANTE", "GERENTE_FABRICACION")
+    ),
+) -> FabricacionRegistrada:
+    fabricante_id = None
+    if usuario.get("role") == "FABRICANTE":
+        identidad_fabricante = usuario.get("sub")
+        if (
+            not isinstance(identidad_fabricante, str)
+            or not identidad_fabricante.strip()
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="El token no identifica al fabricante",
+            )
+        fabricante_id = identidad_fabricante
+
+    try:
+        entity = await service.registrar(data, fabricante_id=fabricante_id)
+    except DomainError:
+        raise
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde", 500
+        ) from exc
+
+    return FabricacionRegistrada(
+        mensaje="Orden de fabricación registrada correctamente",
+        id=entity.id,
+        estado=entity.estado,
+    )
 
 
-@router.get("/{fabricacion_id}/formula")
-async def formula(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> dict:
+@router.patch("/{fabricacion_id}", response_model=ModificacionResult)
+def modificar(
+    fabricacion_id: OrdenId,
+    data: FabricacionUpdate,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(
+        require_roles("FABRICANTE", "GERENTE_FABRICACION")
+    ),
+) -> ModificacionResult:
+    try:
+        fabricacion = service.modificar(fabricacion_id, data)
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    return ModificacionResult(
+        mensaje="Orden de fabricación modificada correctamente",
+        id=fabricacion.id,
+        estado=fabricacion.estado,
+    )
+
+
+@router.post(
+    "/{fabricacion_id}/validacion",
+    response_model=ValidacionResult,
+    responses={409: {"model": ValidacionError}},
+)
+async def validar(
+    fabricacion_id: OrdenId,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(require_roles(
+        "FABRICANTE", "GERENTE_FABRICACION"
+    )),
+    ) -> ValidacionResult | JSONResponse:
+
+    try:
+        fabricacion, faltantes = await service.validar(
+            fabricacion_id
+        )
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    if faltantes:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Materiales insuficientes para fabricar la orden",
+                "faltantes": faltantes,
+            },
+        )
+
+    return ValidacionResult(
+        mensaje="Materiales disponibles: la orden puede iniciar su fabricación",
+        id=fabricacion.id,
+        estado=fabricacion.estado,
+    )
+
+
+@router.patch("/{fabricacion_id}/inicio", response_model=InicioResult)
+async def iniciar(
+    fabricacion_id: OrdenId,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    usuario: dict = Depends(
+        require_roles("FABRICANTE", "GERENTE_FABRICACION")
+    ),
+) -> InicioResult:
+    try:
+        fabricacion = await service.iniciar(fabricacion_id, usuario)
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    return InicioResult(
+        **FabricacionRead.model_validate(fabricacion).model_dump(),
+        mensaje="La orden quedó en producción",
+    )
+
+
+@router.get("/{fabricacion_id}/formula", response_model=FormulaRead)
+async def formula(
+    fabricacion_id: OrdenId,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE")),) -> dict:
     return await service.formula(fabricacion_id)
 
 
 @router.post("/{fabricacion_id}/cierre", response_model=FabricacionRead)
-async def cerrar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def cerrar(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                  _: dict = Depends(require_roles("GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> Fabricacion:
     return await service.cerrar(fabricacion_id)
 
 
 @router.post("/{fabricacion_id}/sincronizacion", response_model=FabricacionRead)
-async def sincronizar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def sincronizar(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                       _: dict = Depends(require_roles("GERENTE_FABRICACION"))) -> Fabricacion:
     return await service.sincronizar(fabricacion_id)
 
@@ -62,6 +198,6 @@ async def listar(page: int = Query(default=1, ge=1), estado: str | None = None,
 
 
 @router.get("/{fabricacion_id}", response_model=FabricacionRead)
-async def detalle(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def detalle(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                   _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> Fabricacion:
     return service.obtener(fabricacion_id)

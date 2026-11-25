@@ -1,10 +1,12 @@
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
 
 import httpx
 import pytest
 
-from app.application.schemas.fabricacion_schema import FabricacionCreate
+from app.application.schemas.fabricacion_schema import (
+    FabricacionCreate,
+    FabricacionUpdate,
+)
 from app.application.services import fabricacion_service as service_module
 from app.core.exceptions import DomainError
 from app.domain.entities.fabricacion import Fabricacion
@@ -33,6 +35,11 @@ def make_fabricacion(
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA,
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE,
     formula_snapshot: dict | None = None,
+    fabricante_id: str | None = None,
+    especificaciones: dict | None = None,
+    especificaciones_tecnicas: str | None = None,
+    insumos_terceros: list[dict[str, object]] | None = None,
+    observaciones: str | None = None,
 ) -> Fabricacion:
     return Fabricacion(
         referencia_material="MAT-1",
@@ -41,6 +48,12 @@ def make_fabricacion(
         estado=estado,
         sincronizacion=sincronizacion,
         formula_snapshot=formula_snapshot,
+        fabricante_id=fabricante_id,
+        especificaciones=especificaciones or {},
+        especificaciones_tecnicas=especificaciones_tecnicas,
+        insumos_terceros=insumos_terceros,
+        observaciones=observaciones,
+        id="ORD-000123",
     )
 
 
@@ -68,86 +81,293 @@ def make_service(monkeypatch: pytest.MonkeyPatch):
     return factory
 
 
+def datos_validos(**cambios) -> FabricacionCreate:
+    base = {
+        "tipoProducto": "Cadena",
+        "referenciaProducto": "CAD-3/8-050",
+        "cantidad": 20,
+        "especificaciones": {"paso": "3/8", "calibre": "0.050"},
+        "insumosTerceros": [{"tipo": "Motosierra", "cantidad": 20}],
+        "observaciones": "texto",
+    }
+    base.update(cambios)
+    return FabricacionCreate.model_validate(base)
+
+
+def respuesta_http(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "http://materials/materiales/X")
+    return httpx.HTTPStatusError("error", request=request, response=httpx.Response(status, request=request))
+
+
 @pytest.mark.anyio
-async def test_registrar_crea_y_guarda_una_fabricacion_con_formula_aprobada(make_service):
+async def test_registrar_crea_y_guarda_una_orden_con_formula_aprobada(make_service):
     service, repository, materiales, _ = make_service()
     materiales.obtener_material.return_value = {"formula": FORMULA}
-    data = FabricacionCreate(
-        referencia_material="MAT-1",
-        tipo_producto=TipoProducto.CADENA,
-        cantidad=3,
-        observaciones="Orden urgente",
-    )
 
-    result = await service.registrar(data)
+    result = await service.registrar(datos_validos())
 
-    materiales.obtener_material.assert_awaited_once_with("MAT-1")
+    materiales.obtener_material.assert_awaited_once_with("CAD-3/8-050")
     repository.save.assert_called_once()
     saved = repository.save.call_args.args[0]
     assert result is saved
+    assert saved.estado == EstadoFabricacion.REGISTRADA
     assert (saved.referencia_material, saved.tipo_producto, saved.cantidad) == (
-        "MAT-1",
+        "CAD-3/8-050",
         TipoProducto.CADENA,
-        3,
+        20,
     )
-    assert saved.observaciones == "Orden urgente"
+    assert saved.especificaciones == {"paso": "3/8", "calibre": "0.050"}
+    assert saved.insumos_terceros == [{"tipo": "Motosierra", "cantidad": 20}]
+    assert saved.observaciones == "texto"
+    assert saved.fabricante_id is None
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("formula", [{}, {"estado": "BORRADOR"}])
-async def test_registrar_rechaza_formula_no_aprobada_sin_guardar(make_service, formula):
+async def test_registrar_persiste_fabricante_id_proporcionado_por_ruta(make_service):
     service, repository, materiales, _ = make_service()
-    materiales.obtener_material.return_value = {"formula": formula}
-    data = FabricacionCreate(
-        referencia_material="MAT-1",
-        tipo_producto=TipoProducto.CADENA,
-        cantidad=3,
-    )
+    materiales.obtener_material.return_value = {"formula": FORMULA}
 
-    with pytest.raises(DomainError, match="no está aprobada") as error:
-        await service.registrar(data)
+    await service.registrar(datos_validos(), fabricante_id="fab-1")
+
+    saved = repository.save.call_args.args[0]
+    assert saved.fabricante_id == "fab-1"
+
+
+@pytest.mark.anyio
+async def test_registrar_sin_insumos_de_terceros_es_valido(make_service):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.return_value = {"formula": FORMULA}
+
+    await service.registrar(datos_validos(insumosTerceros=None, observaciones=None))
+
+    assert repository.save.call_args.args[0].insumos_terceros == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("estado", "mensaje"),
+    [
+        ("BORRADOR", "La fórmula de la referencia aún no está aprobada"),
+        ("EVALUANDO_PATENTE", "La fórmula de la referencia aún no está aprobada"),
+        (
+            "RECHAZADA_POR_INFRACCION",
+            "La fórmula de la referencia fue rechazada por infracción de patente y no puede fabricarse",
+        ),
+        (None, "La fórmula de la referencia aún no está aprobada"),
+    ],
+)
+async def test_registrar_rechaza_formula_no_aprobada_con_409(make_service, estado, mensaje):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.return_value = {"formula": {"estado": estado}}
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos())
+
+    assert error.value.status_code == 409
+    assert error.value.message == mensaje
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_registrar_sin_formula_en_el_material_devuelve_409(make_service):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.return_value = {"id": "CAD-3/8-050"}
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos())
 
     assert error.value.status_code == 409
     repository.save.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_registrar_propaga_error_del_cliente_de_materiales(make_service):
+async def test_registrar_referencia_inexistente_devuelve_422(make_service):
     service, repository, materiales, _ = make_service()
-    materiales.obtener_material.side_effect = httpx.ConnectError("materials unavailable")
-    data = FabricacionCreate(
-        referencia_material="MAT-1",
-        tipo_producto=TipoProducto.CADENA,
-        cantidad=3,
+    materiales.obtener_material.side_effect = respuesta_http(404)
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos())
+
+    assert (error.value.status_code, error.value.message) == (
+        422,
+        "La referencia de producto no es válida",
     )
-
-    with pytest.raises(httpx.ConnectError, match="materials unavailable"):
-        await service.registrar(data)
-
     repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "falla",
+    [
+        httpx.ConnectError("materials unavailable"),
+        httpx.ReadTimeout("timeout"),
+        respuesta_http(500),
+        respuesta_http(503),
+        ValueError("respuesta no es JSON"),
+    ],
+)
+async def test_registrar_materiales_no_disponible_devuelve_503(make_service, falla):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.side_effect = falla
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos())
+
+    assert (error.value.status_code, error.value.message) == (
+        503,
+        "El módulo de Materiales no está disponible por el momento",
+    )
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_registrar_respuesta_de_materiales_inesperada_devuelve_503(make_service):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.return_value = ["no", "es", "un", "objeto"]
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos())
+
+    assert error.value.status_code == 503
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("cambios", "status", "mensaje"),
+    [
+        ({"tipoProducto": "Motosierra"}, 422, "El tipo de producto no es válido"),
+        ({"cantidad": 0}, 422, "La cantidad debe ser un número entero mayor que cero"),
+        ({"especificaciones": {}}, 422, "Faltan las especificaciones técnicas"),
+        ({"observaciones": "x" * 251}, 422, "Las observaciones no pueden superar 250 caracteres"),
+    ],
+)
+async def test_registrar_no_consulta_materiales_si_el_formato_es_invalido(
+    make_service, cambios, status, mensaje
+):
+    service, repository, materiales, _ = make_service()
+
+    with pytest.raises(DomainError) as error:
+        await service.registrar(datos_validos(**cambios))
+
+    assert (error.value.status_code, error.value.message) == (status, mensaje)
+    materiales.obtener_material.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_registrar_desde_notificacion_no_exige_especificaciones(make_service):
+    service, repository, materiales, _ = make_service()
+    materiales.obtener_material.return_value = {"formula": FORMULA}
+    data = datos_validos(especificaciones=None)
+
+    await service.registrar(data, desde_notificacion=True)
+
+    assert repository.save.call_args.args[0].especificaciones == {}
 
 
 @pytest.mark.anyio
 async def test_validar_con_faltantes_devuelve_la_entidad_sin_cambiarla(make_service):
     entity = make_fabricacion()
-    faltantes = [{"codigo": "ACERO", "diferencia": 2}]
-    service, repository, _, inventario = make_service(entity)
-    inventario.consultar_disponibilidad.return_value = faltantes
 
-    result, result_faltantes = await service.validar(entity.id)
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero al carbono",
+            "cantidad": 100,
+            "unidad": "g",
+        }]
+    }
+
+    inventario.consultar_disponibilidad.return_value = {
+        "disponible": 200,
+        "unidadMedida": "g",
+    }
+
+    result, faltantes = await service.validar(entity.id)
 
     assert result is entity
-    assert result_faltantes == faltantes
+    assert faltantes == [{
+        "codigoMaterial": "ACERO",
+        "requerido": 300,
+        "disponible": 200,
+        "faltante": 100,
+    }]
+
     assert entity.estado == EstadoFabricacion.REGISTRADA
-    inventario.consultar_disponibilidad.assert_awaited_once_with("MAT-1", {}, 3)
+
+    materiales.obtener_formula.assert_awaited_once_with("MAT-1")
+    inventario.consultar_disponibilidad.assert_awaited_once_with("ACERO")
+    repository.save.assert_not_called()
+    inventario.descontar.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_validar_detecta_faltante_de_un_material_anterior(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [
+            {
+                "codigo": "ACERO",
+                "descripcion": "Acero",
+                "cantidad": 100,
+                "unidad": "g",
+            },
+            {
+                "codigo": "MADERA",
+                "descripcion": "Madera",
+                "cantidad": 50,
+                "unidad": "g",
+            },
+        ]
+    }
+
+    inventario.consultar_disponibilidad.side_effect = [
+        {"disponible": 200, "unidadMedida": "g"},
+        {"disponible": 150, "unidadMedida": "g"},
+    ]
+
+    result, faltantes = await service.validar(entity.id)
+
+    assert result is entity
+    assert faltantes == [{
+        "codigoMaterial": "ACERO",
+        "requerido": 300,
+        "disponible": 200,
+        "faltante": 100,
+    }]
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    assert [
+        call.args[0]
+        for call in inventario.consultar_disponibilidad.await_args_list
+    ] == ["ACERO", "MADERA"]
     repository.save.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_validar_sin_faltantes_transiciona_y_guarda_como_validada(make_service):
+async def test_validar_no_genera_faltantes_por_redondeo(make_service):
     entity = make_fabricacion()
-    service, repository, _, inventario = make_service(entity)
-    inventario.consultar_disponibilidad.return_value = []
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero",
+            "cantidad": 0.1,
+            "unidad": "g",
+        }]
+    }
+
+    inventario.consultar_disponibilidad.return_value = {
+        "disponible": 0.3,
+        "unidadMedida": "g",
+    }
 
     result, faltantes = await service.validar(entity.id)
 
@@ -158,24 +378,296 @@ async def test_validar_sin_faltantes_transiciona_y_guarda_como_validada(make_ser
 
 
 @pytest.mark.anyio
-async def test_validar_falla_si_no_existe_la_fabricacion(make_service):
-    service, repository, _, inventario = make_service()
+async def test_validar_rechaza_cantidad_fuera_de_rango(make_service):
+    entity = make_fabricacion()
 
-    with pytest.raises(DomainError, match="Fabricación no encontrada") as error:
-        await service.validar(uuid4())
+    service, repository, materiales, inventario = make_service(entity)
 
-    assert error.value.status_code == 404
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero",
+            "cantidad": 1e308,
+            "unidad": "g",
+        }]
+    }
+
+    with pytest.raises(DomainError) as error:
+        await service.validar(entity.id)
+
+    assert error.value.status_code == 409
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+
     inventario.consultar_disponibilidad.assert_not_awaited()
     repository.save.assert_not_called()
 
 
 @pytest.mark.anyio
+async def test_validar_sin_faltantes_transiciona_y_guarda_como_validada(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero al carbono",
+            "cantidad": 100,
+            "unidad": "g",
+        }]
+    }
+
+    inventario.consultar_disponibilidad.return_value = {
+        "disponible": 300,
+        "unidadMedida": "g",
+    }
+
+    result, faltantes = await service.validar(entity.id)
+
+    assert result is entity
+    assert faltantes == []
+    assert entity.estado == EstadoFabricacion.VALIDADA
+
+    repository.save.assert_called_once_with(entity)
+    inventario.descontar.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_modificar_actualiza_campos_en_orden_registrada(make_service):
+    entity = make_fabricacion()
+    service, repository, _, _ = make_service(entity)
+    data = FabricacionUpdate(
+        cantidad=5,
+        especificaciones_tecnicas="Acero inoxidable",
+        insumos_terceros=[{"nombre": "Tornillo", "cantidad": 4}],
+        observaciones="Orden urgente",
+    )
+
+    result = service.modificar(entity.id, data)
+
+    assert result is entity
+    assert entity.cantidad == 5
+    assert entity.especificaciones_tecnicas == "Acero inoxidable"
+    assert entity.insumos_terceros == [{"nombre": "Tornillo", "cantidad": 4}]
+    assert entity.observaciones == "Orden urgente"
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("campo", "valor"),
+    [
+        ("cantidad", 5),
+        ("especificaciones", {"paso": "3/8"}),
+        ("especificaciones_tecnicas", "Acero inoxidable"),
+        ("insumos_terceros", [{"nombre": "Tornillo", "cantidad": 4}]),
+    ],
+)
+async def test_modificar_datos_productivos_reinicia_validacion(
+    make_service, campo, valor
+):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        especificaciones_tecnicas="Acero al carbono",
+        insumos_terceros=[{"nombre": "Tuerca", "cantidad": 2}],
+    )
+    service, repository, _, _ = make_service(entity)
+
+    result = service.modificar(
+        entity.id,
+        FabricacionUpdate(**{campo: valor}),
+    )
+
+    assert result is entity
+    assert getattr(entity, campo) == valor
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_modificar_solo_observaciones_conserva_validacion(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        observaciones="Anterior",
+    )
+    service, repository, _, _ = make_service(entity)
+
+    result = service.modificar(
+        entity.id,
+        FabricacionUpdate(observaciones="Actualizada"),
+    )
+
+    assert result is entity
+    assert entity.observaciones == "Actualizada"
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_modificar_valor_productivo_igual_conserva_validacion(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        especificaciones_tecnicas="Acero inoxidable",
+    )
+    service, repository, _, _ = make_service(entity)
+
+    service.modificar(
+        entity.id,
+        FabricacionUpdate(especificaciones_tecnicas="Acero inoxidable"),
+    )
+
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "estado",
+    [EstadoFabricacion.EN_PROCESO, EstadoFabricacion.CERRADA],
+)
+async def test_modificar_rechaza_orden_fuera_de_estado_permitido(
+    make_service, estado
+):
+    entity = make_fabricacion(estado=estado)
+    service, repository, _, _ = make_service(entity)
+
+    with pytest.raises(DomainError) as error:
+        service.modificar(entity.id, FabricacionUpdate(cantidad=5))
+
+    assert error.value.status_code == 409
+    assert entity.estado == estado
+    assert entity.cantidad == 3
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_modificar_orden_inexistente_devuelve_404(make_service):
+    service, repository, _, _ = make_service()
+
+    with pytest.raises(DomainError) as error:
+        service.modificar("ORD-000124", FabricacionUpdate(cantidad=5))
+
+    assert error.value.status_code == 404
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_validar_falla_si_no_existe_la_fabricacion(make_service):
+    service, repository, _, inventario = make_service()
+
+    with pytest.raises(DomainError, match="No se encontró la orden") as error:
+        await service.validar("ORD-000123")
+
+    assert error.value.status_code == 404
+    inventario.consultar_disponibilidad.assert_not_awaited()
+    repository.save.assert_not_called()
+
+@pytest.mark.anyio
+async def test_validar_rechaza_orden_no_registrada(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA
+    )
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    with pytest.raises(DomainError) as error:
+        await service.validar(entity.id)
+
+    assert error.value.status_code == 409
+    materiales.obtener_formula.assert_not_awaited()
+    inventario.consultar_disponibilidad.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("formula", "status"),
+    [
+        ({}, 404),
+        ({"items": []}, 409),
+    ],
+)
+async def test_validar_se_detiene_si_formula_es_invalida(
+    make_service, formula, status
+):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = formula
+
+    with pytest.raises(DomainError) as error:
+        await service.validar(entity.id)
+
+    assert error.value.status_code == status
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+
+    inventario.consultar_disponibilidad.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_validar_inventario_no_disponible(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero",
+            "cantidad": 100,
+            "unidad": "g",
+        }]
+    }
+
+    inventario.consultar_disponibilidad.side_effect = (
+        httpx.ConnectError("Inventario no disponible")
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.validar(entity.id)
+
+    assert error.value.status_code == 503
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_formula_error_inesperado_devuelve_503(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.side_effect = RuntimeError(
+        "Error inesperado de Materiales"
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 503
+    assert error.value.message == (
+        "El módulo de Materiales no está disponible por el momento"
+    )
+
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_iniciar_obtiene_formula_aprobada_y_guarda_transicion(make_service):
-    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        fabricante_id="fab-1",
+    )
     service, repository, materiales, _ = make_service(entity)
     materiales.obtener_formula.return_value = FORMULA
 
-    result = await service.iniciar(entity.id)
+    result = await service.iniciar(
+        entity.id,
+        {"role": "FABRICANTE", "sub": "fab-1"},
+    )
 
     materiales.obtener_formula.assert_awaited_once_with("MAT-1")
     assert result is entity
@@ -193,42 +685,316 @@ async def test_iniciar_propaga_error_de_entidad_si_no_esta_validada(make_service
     materiales.obtener_formula.return_value = FORMULA
 
     with pytest.raises(DomainError, match="Solo se pueden iniciar"):
-        await service.iniciar(entity.id)
+        await service.iniciar(
+            entity.id,
+            {"role": "GERENTE_FABRICACION"},
+        )
 
     assert entity.estado == EstadoFabricacion.REGISTRADA
+    materiales.obtener_formula.assert_not_awaited()
     repository.save.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_formula_devuelve_snapshot_durante_fabricacion(make_service):
+async def test_iniciar_rechaza_fabricante_no_asignado(make_service):
     entity = make_fabricacion(
-        estado=EstadoFabricacion.EN_PROCESO,
-        formula_snapshot=FORMULA,
+        estado=EstadoFabricacion.VALIDADA,
+        fabricante_id="fab-asignado",
     )
-    service, _, _, _ = make_service(entity)
+    service, repository, materiales, _ = make_service(entity)
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            entity.id,
+            {"role": "FABRICANTE", "sub": "otro-fabricante"},
+        )
+
+    assert error.value.status_code == 403
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    materiales.obtener_formula.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_iniciar_gerente_puede_iniciar_orden_sin_fabricante_asignado(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+    )
+    service, repository, materiales, _ = make_service(entity)
+    materiales.obtener_formula.return_value = FORMULA
+
+    result = await service.iniciar(
+        entity.id,
+        {"role": "GERENTE_FABRICACION", "sub": "gerente-1"},
+    )
+
+    assert result is entity
+    assert entity.estado == EstadoFabricacion.EN_PROCESO
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_iniciar_fabricante_rechaza_orden_sin_asignacion(make_service):
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service, repository, materiales, _ = make_service(entity)
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            entity.id,
+            {"role": "FABRICANTE", "sub": "fab-1"},
+        )
+
+    assert error.value.status_code == 403
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    materiales.obtener_formula.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_iniciar_orden_inexistente_devuelve_404(make_service):
+    service, repository, materiales, _ = make_service()
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            "ORD-000124",
+            {"role": "GERENTE_FABRICACION"},
+        )
+
+    assert error.value.status_code == 404
+    materiales.obtener_formula.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_iniciar_formula_no_aprobada_conserva_estado_validado(make_service):
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service, repository, materiales, _ = make_service(entity)
+    materiales.obtener_formula.return_value = {
+        "estado": "BORRADOR",
+        "version": "2",
+    }
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            entity.id,
+            {"role": "GERENTE_FABRICACION"},
+        )
+
+    assert error.value.status_code == 409
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_kind", ["connection", "http"])
+async def test_iniciar_materiales_no_disponible_conserva_estado_validado(
+    make_service, error_kind
+):
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service, repository, materiales, _ = make_service(entity)
+    if error_kind == "connection":
+        materiales.obtener_formula.side_effect = httpx.ConnectError(
+            "Servicio no disponible"
+        )
+    else:
+        request = httpx.Request(
+            "GET", "http://materiales/materiales/MAT-1"
+        )
+        response = httpx.Response(503, request=request)
+        materiales.obtener_formula.side_effect = httpx.HTTPStatusError(
+            "Servicio no disponible",
+            request=request,
+            response=response,
+        )
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            entity.id,
+            {"role": "GERENTE_FABRICACION"},
+        )
+
+    assert error.value.status_code == 503
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_iniciar_materiales_404_no_se_trata_como_indisponibilidad(make_service):
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service, repository, materiales, _ = make_service(entity)
+    request = httpx.Request("GET", "http://materiales/materiales/MAT-1")
+    response = httpx.Response(404, request=request)
+    materiales.obtener_formula.side_effect = httpx.HTTPStatusError(
+        "Material no encontrado",
+        request=request,
+        response=response,
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.iniciar(
+            entity.id,
+            {"role": "GERENTE_FABRICACION"},
+        )
+
+    assert error.value.status_code == 404
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_iniciar_error_inesperado_no_cambia_estado(make_service):
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service, repository, materiales, _ = make_service(entity)
+    materiales.obtener_formula.side_effect = RuntimeError(
+        "Error interno de Materiales"
+    )
+
+    with pytest.raises(RuntimeError, match="Error interno"):
+        await service.iniciar(
+            entity.id,
+            {"role": "GERENTE_FABRICACION"},
+        )
+
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_formula_devuelve_formula_vigente(make_service):
+    entity = make_fabricacion()
+    service, repository, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "estado": "APROBADA",
+        "version": "3",
+        "items": [
+            {
+                "codigo": "MP-001",
+                "descripcion": "Acero al carbono",
+                "cantidad": 250.5,
+                "unidad": "g",
+            }
+        ],
+    }
 
     result = await service.formula(entity.id)
 
-    assert result is FORMULA
+    assert result == {
+        "referenciaProducto": "MAT-1",
+        "insumos": [
+            {
+                "codigoMaterial": "MP-001",
+                "descripcion": "Acero al carbono",
+                "cantidadPorUnidad": 250.5,
+                "unidadMedida": "g",
+            }
+        ],
+    }
+
+    materiales.obtener_formula.assert_awaited_once_with("MAT-1")
+    repository.save.assert_not_called()
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+
+@pytest.mark.anyio
+async def test_formula_inexistente_devuelve_404(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.return_value = {}
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 404
+    assert error.value.message == (
+        "No existe una fórmula para esa referencia"
+    )
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("estado", "snapshot", "message"),
+    "formula",
     [
-        (EstadoFabricacion.REGISTRADA, FORMULA, "solo está disponible"),
-        (EstadoFabricacion.EN_PROCESO, None, "fórmula está incompleta"),
-        (EstadoFabricacion.CERRADA, {"version": "2"}, "fórmula está incompleta"),
+        {"items": []},
+        {"version": "2"},
+        {"items": "incorrecto"},
+        {"items": [None]},
+        {"items": [{"codigo": "MP-001"}]},
+        {"items": [{
+            "codigo": "",
+            "descripcion": "Acero",
+            "cantidad": 250,
+            "unidad": "g",
+        }]},
+        {"items": [{
+            "codigo": "MP-001",
+            "descripcion": "Acero",
+            "cantidad": -250,
+            "unidad": "g",
+        }]},
+        {"items": [{
+            "codigo": "MP-001",
+            "descripcion": "Acero",
+            "cantidad": True,
+            "unidad": "g",
+        }]},
     ],
 )
-async def test_formula_rechaza_estado_o_snapshot_incompleto(
-    make_service, estado, snapshot, message
-):
-    entity = make_fabricacion(estado=estado, formula_snapshot=snapshot)
-    service, _, _, _ = make_service(entity)
+async def test_formula_incompleta_devuelve_409(make_service, formula):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
 
-    with pytest.raises(DomainError, match=message):
+    materiales.obtener_formula.return_value = formula
+
+    with pytest.raises(DomainError) as error:
         await service.formula(entity.id)
+
+    assert error.value.status_code == 409
+    assert error.value.message == "La fórmula está incompleta"
+
+
+@pytest.mark.anyio
+async def test_formula_materiales_no_disponible(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.side_effect = httpx.ConnectError(
+        "Servicio no disponible"
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 503
+    assert error.value.message == (
+        "El módulo de Materiales no está disponible por el momento"
+    )
+
+
+@pytest.mark.anyio
+async def test_formula_materiales_responde_404(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    request = httpx.Request(
+        "GET", "http://materiales/materiales/MAT-1"
+    )
+
+    response = httpx.Response(404, request=request)
+
+    materiales.obtener_formula.side_effect = httpx.HTTPStatusError(
+        "Fórmula no encontrada",
+        request=request,
+        response=response,
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 404
+    assert error.value.message == (
+        "No existe una fórmula para esa referencia"
+    )
 
 
 @pytest.mark.anyio
@@ -360,7 +1126,7 @@ def test_obtener_falla_si_no_existe_la_fabricacion(make_service):
     service, _, _, _ = make_service()
 
     with pytest.raises(DomainError, match="Fabricación no encontrada") as error:
-        service.obtener(uuid4())
+        service.obtener("ORD-000123")
 
     assert error.value.status_code == 404
 

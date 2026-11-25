@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from typing import Any
 
 from app.core.exceptions import DomainError
 from app.domain.enums.estados import (
@@ -16,7 +16,9 @@ class Fabricacion:
     tipo_producto: TipoProducto
     cantidad: int
     observaciones: str | None = None
-    id: UUID = field(default_factory=uuid4)
+    fabricante_id: str | None = None
+    especificaciones_tecnicas: str | None = None
+    id: str = ""
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE
     formula_version: str | None = None
@@ -25,6 +27,8 @@ class Fabricacion:
     started_at: datetime | None = None
     closed_at: datetime | None = None
     sync_attempts: int = 0
+    especificaciones: dict[str, Any] = field(default_factory=dict)
+    insumos_terceros: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.cantidad <= 0:
@@ -40,7 +44,7 @@ class Fabricacion:
     def iniciar(self, formula: dict) -> None:
         if self.estado != EstadoFabricacion.VALIDADA:
             raise DomainError("Solo se pueden iniciar órdenes Validadas")
-        if not formula or not formula.get("version"):
+        if not isinstance(formula, dict) or not formula.get("version"):
             raise DomainError("La fórmula está incompleta", 409)
         if formula.get("estado") != "APROBADA":
             raise DomainError("La fórmula ya no está aprobada", 409)
