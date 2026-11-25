@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Descargar codigo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -37,7 +39,7 @@ jobs:
         run: mypy --disallow-untyped-defs app
 
       - name: Ejecutar pruebas y medir cobertura
-        run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=80
 
       - name: Construir imagen Docker
         run: docker build -t cutit-fabricacion .
@@ -58,6 +60,12 @@ jobs:
           tags: |
             alexis2105/cutit-fabricacion:latest
             alexis2105/cutit-fabricacion:${{ github.sha }}
+
+      - name: Analizar codigo con SonarQube Cloud 
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: SonarSource/sonarqube-scan-action@v8.5.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       
   deploy-production:
     name: Deploy to AWS EC2
