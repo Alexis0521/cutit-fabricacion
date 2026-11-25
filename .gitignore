@@ -37,3 +37,9 @@ Desktop.ini
 *.log
 *.tmp
 *.bak
+
+# SonarQube
+.scannerwork/
+
+# Reporte de cobertura generado por Pytest
+coverage.xml
