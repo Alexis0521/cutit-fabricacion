@@ -52,22 +52,22 @@ class FabricacionService:
             codigo = insumo["codigoMaterial"]
             unidad = insumo["unidadMedida"]
 
-        requerido = (
-            Decimal(str(insumo["cantidadPorUnidad"]))
-            * entity.cantidad
-        )
-
-        clave = (codigo, unidad)
-
-        total = requerimientos.get(clave, Decimal(0)) + requerido
-
-        if not math.isfinite(float(total)):
-            raise DomainError(
-                "La cantidad requerida de material excede el límite permitido",
-                409,
+            requerido = (
+                Decimal(str(insumo["cantidadPorUnidad"]))
+                * entity.cantidad
             )
 
-        requerimientos[clave] = total
+            clave = (codigo, unidad)
+
+            total = requerimientos.get(clave, Decimal(0)) + requerido
+
+            if not math.isfinite(float(total)):
+                raise DomainError(
+                    "La cantidad requerida de material excede el límite permitido",
+                    409,
+                )
+
+            requerimientos[clave] = total
 
         for (codigo, unidad), requerido in requerimientos.items():
 
@@ -98,13 +98,13 @@ class FabricacionService:
 
             disponible_decimal = Decimal(str(disponible))
 
-        if disponible_decimal < requerido:
-            faltantes.append({
-                "codigoMaterial": codigo,
-                "requerido": float(requerido),
-                "disponible": float(disponible_decimal),
-                "faltante": float(requerido - disponible_decimal),
-            })
+            if disponible_decimal < requerido:
+                faltantes.append({
+                    "codigoMaterial": codigo,
+                    "requerido": float(requerido),
+                    "disponible": float(disponible_decimal),
+                    "faltante": float(requerido - disponible_decimal),
+                })
 
         if faltantes:
             return entity, faltantes

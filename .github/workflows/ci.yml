@@ -58,7 +58,7 @@ jobs:
           context: .
           push: true
           tags: |
-            alexis2105/cutit-fabricacion:latest
+            alexis2105/cutit-fabricacion:${{ github.ref == 'refs/heads/main' && 'latest' || 'develop' }}
             alexis2105/cutit-fabricacion:${{ github.sha }}
 
       - name: Analizar codigo con SonarQube Cloud 
@@ -74,8 +74,16 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
+      - name: Descargar configuracion de despliegue
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Actualizar API en EC2
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           cd /home/ubuntu/cutit-fabricacion-repo
+          cp "$GITHUB_WORKSPACE/docker-compose.yml" docker-compose.yml
           docker compose pull api
           docker compose up -d --no-deps api

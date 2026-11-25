@@ -166,6 +166,51 @@ async def test_validar_con_faltantes_devuelve_la_entidad_sin_cambiarla(make_serv
 
 
 @pytest.mark.anyio
+async def test_validar_detecta_faltante_de_un_material_anterior(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [
+            {
+                "codigo": "ACERO",
+                "descripcion": "Acero",
+                "cantidad": 100,
+                "unidad": "g",
+            },
+            {
+                "codigo": "MADERA",
+                "descripcion": "Madera",
+                "cantidad": 50,
+                "unidad": "g",
+            },
+        ]
+    }
+
+    inventario.consultar_disponibilidad.side_effect = [
+        {"disponible": 200, "unidadMedida": "g"},
+        {"disponible": 150, "unidadMedida": "g"},
+    ]
+
+    result, faltantes = await service.validar(entity.id)
+
+    assert result is entity
+    assert faltantes == [{
+        "codigoMaterial": "ACERO",
+        "requerido": 300,
+        "disponible": 200,
+        "faltante": 100,
+    }]
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    assert [
+        call.args[0]
+        for call in inventario.consultar_disponibilidad.await_args_list
+    ] == ["ACERO", "MADERA"]
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_validar_no_genera_faltantes_por_redondeo(make_service):
     entity = make_fabricacion()
 
