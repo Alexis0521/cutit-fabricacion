@@ -5,7 +5,10 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
-from app.application.schemas.fabricacion_schema import FabricacionCreate
+from app.application.schemas.fabricacion_schema import (
+    FabricacionCreate,
+    FabricacionUpdate,
+)
 from app.core.exceptions import DomainError
 from app.domain.entities.fabricacion import Fabricacion
 from app.domain.enums.estados import EstadoFabricacion
@@ -119,6 +122,47 @@ class FabricacionService:
         entity.validar()
 
         return self.repo.save(entity), []
+
+    def modificar(
+        self,
+        fabricacion_id: UUID,
+        data: FabricacionUpdate,
+    ) -> Fabricacion:
+        entity = self._get(fabricacion_id)
+
+        if entity.estado not in (
+            EstadoFabricacion.REGISTRADA,
+            EstadoFabricacion.VALIDADA,
+        ):
+            raise DomainError(
+                "Solo se pueden modificar órdenes Registradas o Validadas",
+                409,
+            )
+
+        cambios = data.model_dump(exclude_unset=True)
+        if not cambios:
+            raise DomainError("Debe enviar al menos un campo modificable", 422)
+
+        requiere_revalidacion = any(
+            campo in cambios
+            and getattr(entity, campo) != cambios[campo]
+            for campo in (
+                "cantidad",
+                "especificaciones_tecnicas",
+                "insumos_terceros",
+            )
+        )
+
+        for campo, valor in cambios.items():
+            setattr(entity, campo, valor)
+
+        if (
+            entity.estado == EstadoFabricacion.VALIDADA
+            and requiere_revalidacion
+        ):
+            entity.estado = EstadoFabricacion.REGISTRADA
+
+        return self.repo.save(entity)
 
     async def iniciar(
         self, fabricacion_id: UUID, usuario: dict[str, object]

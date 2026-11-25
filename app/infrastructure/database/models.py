@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Integer, String
+from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +22,11 @@ class FabricacionModel(Base):
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False)
     observaciones: Mapped[str | None] = mapped_column(String(250), nullable=True)
     fabricante_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    especificaciones_tecnicas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insumos_terceros: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
     estado: Mapped[EstadoFabricacion] = mapped_column(SAEnum(EstadoFabricacion), nullable=False)
     sincronizacion: Mapped[EstadoSincronizacion] = mapped_column(SAEnum(EstadoSincronizacion), nullable=False)
     formula_version: Mapped[str | None] = mapped_column(String(100), nullable=True)

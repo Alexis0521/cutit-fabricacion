@@ -17,6 +17,8 @@ class Fabricacion:
     cantidad: int
     observaciones: str | None = None
     fabricante_id: str | None = None
+    especificaciones_tecnicas: str | None = None
+    insumos_terceros: list[dict[str, object]] | None = None
     id: UUID = field(default_factory=uuid4)
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE

@@ -60,6 +60,7 @@ El claim `sub` identifica al usuario. Al registrar una orden, un `FABRICANTE` qu
 ## Endpoints principales
 
 - `POST /fabricaciones`
+- `PATCH /fabricaciones/{id}`
 - `POST /fabricaciones/{id}/validacion`
 - `PATCH /fabricaciones/{id}/inicio`
 - `GET /fabricaciones/{id}/formula`
@@ -69,6 +70,8 @@ El claim `sub` identifica al usuario. Al registrar una orden, un `FABRICANTE` qu
 - `GET /fabricaciones/{id}`
 - `POST /fabricaciones/desde-notificacion` (requiere `X-API-Key`)
 - `GET /health`
+
+La modificación de órdenes acepta cantidad, especificaciones técnicas, insumos de terceros y observaciones. Las órdenes validadas regresan a Registrada si cambian datos que requieren revalidación; cambiar solo observaciones conserva el estado.
 
 ## Decisiones y limitaciones conocidas
 

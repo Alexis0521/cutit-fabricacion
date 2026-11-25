@@ -7,7 +7,7 @@ from app.infrastructure.database.connection import Base
 from app.infrastructure.repositories.fabricacion_repository import FabricacionRepository
 
 
-def test_repository_persists_assigned_manufacturer():
+def test_repository_persists_fabricacion_update_fields():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
 
@@ -19,6 +19,8 @@ def test_repository_persists_assigned_manufacturer():
                 tipo_producto=TipoProducto.CADENA,
                 cantidad=3,
                 fabricante_id="fab-1",
+                especificaciones_tecnicas="Acero inoxidable",
+                insumos_terceros=[{"nombre": "Tornillo", "cantidad": 4}],
                 estado=EstadoFabricacion.VALIDADA,
             )
 
@@ -27,6 +29,8 @@ def test_repository_persists_assigned_manufacturer():
 
         assert loaded is not None
         assert loaded.fabricante_id == "fab-1"
+        assert loaded.especificaciones_tecnicas == "Acero inoxidable"
+        assert loaded.insumos_terceros == [{"nombre": "Tornillo", "cantidad": 4}]
         assert loaded.estado == EstadoFabricacion.VALIDADA
     finally:
         engine.dispose()

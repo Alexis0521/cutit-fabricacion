@@ -161,6 +161,174 @@ def test_manufacturer_without_subject_cannot_register_order(api_client):
 @pytest.mark.parametrize(
     "payload",
     [
+        {"cantidad": 5},
+        {"especificaciones_tecnicas": "Acero inoxidable"},
+        {"insumos_terceros": [{"nombre": "Tornillo", "cantidad": 4}]},
+        {"observaciones": "Prioridad alta"},
+    ],
+)
+def test_modificar_acepta_campos_editables(api_client, payload):
+    client, service = api_client
+    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+    service.modificar.return_value = entity
+
+    response = client.patch(
+        f"/fabricaciones/{entity.id}",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mensaje": "Orden de fabricación modificada correctamente",
+        "id": str(entity.id),
+        "estado": "Validada",
+    }
+    service.modificar.assert_called_once()
+    assert service.modificar.call_args.args[0] == entity.id
+    assert service.modificar.call_args.args[1].model_dump(
+        exclude_unset=True
+    ) == payload
+
+
+def test_modificar_permite_fabricante_autenticado(api_client):
+    client, service = api_client
+    entity = make_fabricacion()
+    service.modificar.return_value = entity
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-1",
+    }
+
+    response = client.patch(
+        f"/fabricaciones/{entity.id}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 200
+    service.modificar.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "campo",
+    ["id", "tipo_producto", "referencia_material", "referencia_producto"],
+)
+def test_modificar_rechaza_campos_no_modificables(api_client, campo):
+    client, service = api_client
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={campo: "no modificable"},
+    )
+
+    assert response.status_code == 422
+    service.modificar.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"cantidad": 0},
+        {"cantidad": True},
+        {"cantidad": 2.5},
+        {"cantidad": None},
+        {"especificaciones_tecnicas": ""},
+        {"especificaciones_tecnicas": "   "},
+        {"especificaciones_tecnicas": None},
+        {"insumos_terceros": "no es una lista"},
+        {"observaciones": "x" * 251},
+    ],
+)
+def test_modificar_rechaza_body_vacio_y_datos_invalidos(api_client, payload):
+    client, service = api_client
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    service.modificar.assert_not_called()
+
+
+def test_modificar_orden_inexistente_devuelve_404(api_client):
+    client, service = api_client
+    service.modificar.side_effect = DomainError(
+        "Fabricación no encontrada",
+        404,
+    )
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 404
+
+
+def test_modificar_estado_no_permitido_devuelve_409(api_client):
+    client, service = api_client
+    service.modificar.side_effect = DomainError(
+        "Solo se pueden modificar órdenes Registradas o Validadas",
+        409,
+    )
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "rol",
+    ["ENCARGADO_ENSAMBLE", "SIN_PERMISOS"],
+)
+def test_modificar_rechaza_rol_sin_permisos(api_client, rol):
+    client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {"role": rol}
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 403
+    service.modificar.assert_not_called()
+
+
+def test_modificar_sin_credenciales_devuelve_401(api_client):
+    client, service = api_client
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 401
+    service.modificar.assert_not_called()
+
+
+def test_modificar_error_inesperado_devuelve_500(api_client):
+    client, service = api_client
+    service.modificar.side_effect = RuntimeError("Error inesperado")
+
+    response = client.patch(
+        f"/fabricaciones/{uuid4()}",
+        json={"cantidad": 5},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
         {"referencia_material": "MAT-1", "tipo_producto": "Cadena", "cantidad": 0},
         {"referencia_material": "MAT-1", "tipo_producto": "No existe", "cantidad": 1},
         {"tipo_producto": "Cadena", "cantidad": 1},

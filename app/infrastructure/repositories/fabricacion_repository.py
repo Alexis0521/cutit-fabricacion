@@ -19,6 +19,8 @@ class FabricacionRepository:
             "cantidad": entity.cantidad,
             "observaciones": entity.observaciones,
             "fabricante_id": entity.fabricante_id,
+            "especificaciones_tecnicas": entity.especificaciones_tecnicas,
+            "insumos_terceros": entity.insumos_terceros,
             "estado": entity.estado,
             "sincronizacion": entity.sincronizacion,
             "formula_version": entity.formula_version,
@@ -57,6 +59,8 @@ class FabricacionRepository:
             cantidad=model.cantidad,
             observaciones=model.observaciones,
             fabricante_id=model.fabricante_id,
+            especificaciones_tecnicas=model.especificaciones_tecnicas,
+            insumos_terceros=model.insumos_terceros,
             id=UUID(model.id),
         )
         entity.estado = model.estado

@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.enums.estados import (
     EstadoFabricacion,
@@ -15,6 +16,31 @@ class FabricacionCreate(BaseModel):
     tipo_producto: TipoProducto
     cantidad: int = Field(gt=0)
     observaciones: str | None = Field(default=None, max_length=250)
+
+
+class FabricacionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cantidad: int | None = Field(default=None, gt=0, strict=True)
+    especificaciones_tecnicas: str | None = Field(default=None, min_length=1)
+    insumos_terceros: list[dict[str, Any]] | None = None
+    observaciones: str | None = Field(default=None, max_length=250)
+
+    @field_validator("especificaciones_tecnicas")
+    @classmethod
+    def especificaciones_no_vacias(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Las especificaciones técnicas son obligatorias")
+        return value
+
+    @model_validator(mode="after")
+    def validar_cantidad_y_especificaciones_presentes(self) -> "FabricacionUpdate":
+        for field in ("cantidad", "especificaciones_tecnicas"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser nulo")
+        if not self.model_fields_set:
+            raise ValueError("Debe enviar al menos un campo modificable")
+        return self
 
 
 class FabricacionRead(BaseModel):
@@ -35,6 +61,12 @@ class FabricacionRead(BaseModel):
 
 class InicioResult(FabricacionRead):
     mensaje: str
+
+
+class ModificacionResult(BaseModel):
+    mensaje: str
+    id: UUID
+    estado: EstadoFabricacion
 
 
 class Faltante(BaseModel):

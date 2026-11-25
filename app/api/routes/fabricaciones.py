@@ -7,8 +7,10 @@ from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
+    FabricacionUpdate,
     FormulaRead,
     InicioResult,
+    ModificacionResult,
     ValidacionError,
     ValidacionResult,
 )
@@ -37,6 +39,37 @@ async def registrar(data: FabricacionCreate, service: FabricacionService = Depen
         fabricante_id = identidad_fabricante
 
     return await service.registrar(data, fabricante_id=fabricante_id)
+
+
+@router.patch(
+    "/{fabricacion_id}",
+    response_model=ModificacionResult,
+)
+def modificar(
+    fabricacion_id: UUID,
+    data: FabricacionUpdate,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(
+        require_roles("FABRICANTE", "GERENTE_FABRICACION")
+    ),
+) -> ModificacionResult:
+    try:
+        fabricacion = service.modificar(fabricacion_id, data)
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    return ModificacionResult(
+        mensaje="Orden de fabricación modificada correctamente",
+        id=fabricacion.id,
+        estado=fabricacion.estado,
+    )
 
 
 @router.post(

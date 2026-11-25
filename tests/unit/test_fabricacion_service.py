@@ -4,7 +4,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.application.schemas.fabricacion_schema import FabricacionCreate
+from app.application.schemas.fabricacion_schema import (
+    FabricacionCreate,
+    FabricacionUpdate,
+)
 from app.application.services import fabricacion_service as service_module
 from app.core.exceptions import DomainError
 from app.domain.entities.fabricacion import Fabricacion
@@ -34,6 +37,9 @@ def make_fabricacion(
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE,
     formula_snapshot: dict | None = None,
     fabricante_id: str | None = None,
+    especificaciones_tecnicas: str | None = None,
+    insumos_terceros: list[dict[str, object]] | None = None,
+    observaciones: str | None = None,
 ) -> Fabricacion:
     return Fabricacion(
         referencia_material="MAT-1",
@@ -43,6 +49,9 @@ def make_fabricacion(
         sincronizacion=sincronizacion,
         formula_snapshot=formula_snapshot,
         fabricante_id=fabricante_id,
+        especificaciones_tecnicas=especificaciones_tecnicas,
+        insumos_terceros=insumos_terceros,
+        observaciones=observaciones,
     )
 
 
@@ -310,6 +319,125 @@ async def test_validar_sin_faltantes_transiciona_y_guarda_como_validada(make_ser
 
     repository.save.assert_called_once_with(entity)
     inventario.descontar.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_modificar_actualiza_campos_en_orden_registrada(make_service):
+    entity = make_fabricacion()
+    service, repository, _, _ = make_service(entity)
+    data = FabricacionUpdate(
+        cantidad=5,
+        especificaciones_tecnicas="Acero inoxidable",
+        insumos_terceros=[{"nombre": "Tornillo", "cantidad": 4}],
+        observaciones="Orden urgente",
+    )
+
+    result = service.modificar(entity.id, data)
+
+    assert result is entity
+    assert entity.cantidad == 5
+    assert entity.especificaciones_tecnicas == "Acero inoxidable"
+    assert entity.insumos_terceros == [{"nombre": "Tornillo", "cantidad": 4}]
+    assert entity.observaciones == "Orden urgente"
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("campo", "valor"),
+    [
+        ("cantidad", 5),
+        ("especificaciones_tecnicas", "Acero inoxidable"),
+        ("insumos_terceros", [{"nombre": "Tornillo", "cantidad": 4}]),
+    ],
+)
+async def test_modificar_datos_productivos_reinicia_validacion(
+    make_service, campo, valor
+):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        especificaciones_tecnicas="Acero al carbono",
+        insumos_terceros=[{"nombre": "Tuerca", "cantidad": 2}],
+    )
+    service, repository, _, _ = make_service(entity)
+
+    result = service.modificar(
+        entity.id,
+        FabricacionUpdate(**{campo: valor}),
+    )
+
+    assert result is entity
+    assert getattr(entity, campo) == valor
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_modificar_solo_observaciones_conserva_validacion(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        observaciones="Anterior",
+    )
+    service, repository, _, _ = make_service(entity)
+
+    result = service.modificar(
+        entity.id,
+        FabricacionUpdate(observaciones="Actualizada"),
+    )
+
+    assert result is entity
+    assert entity.observaciones == "Actualizada"
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_modificar_valor_productivo_igual_conserva_validacion(make_service):
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA,
+        especificaciones_tecnicas="Acero inoxidable",
+    )
+    service, repository, _, _ = make_service(entity)
+
+    service.modificar(
+        entity.id,
+        FabricacionUpdate(especificaciones_tecnicas="Acero inoxidable"),
+    )
+
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "estado",
+    [EstadoFabricacion.EN_PROCESO, EstadoFabricacion.CERRADA],
+)
+async def test_modificar_rechaza_orden_fuera_de_estado_permitido(
+    make_service, estado
+):
+    entity = make_fabricacion(estado=estado)
+    service, repository, _, _ = make_service(entity)
+
+    with pytest.raises(DomainError) as error:
+        service.modificar(entity.id, FabricacionUpdate(cantidad=5))
+
+    assert error.value.status_code == 409
+    assert entity.estado == estado
+    assert entity.cantidad == 3
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_modificar_orden_inexistente_devuelve_404(make_service):
+    service, repository, _, _ = make_service()
+
+    with pytest.raises(DomainError) as error:
+        service.modificar(uuid4(), FabricacionUpdate(cantidad=5))
+
+    assert error.value.status_code == 404
+    repository.save.assert_not_called()
 
 
 @pytest.mark.anyio
