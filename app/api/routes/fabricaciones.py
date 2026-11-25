@@ -1,15 +1,18 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
     FormulaRead,
+    ValidacionError,
     ValidacionResult,
 )
 from app.application.services.fabricacion_service import FabricacionService
+from app.core.exceptions import DomainError
 from app.core.security import require_roles
 from app.domain.entities.fabricacion import Fabricacion
 
@@ -22,11 +25,47 @@ async def registrar(data: FabricacionCreate, service: FabricacionService = Depen
     return await service.registrar(data)
 
 
-@router.post("/{fabricacion_id}/validacion", response_model=ValidacionResult)
-async def validar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> dict[str, bool | list[dict]]:
-    _fabricacion, faltantes = await service.validar(fabricacion_id)
-    return {"disponible": not faltantes, "faltantes": faltantes}
+@router.post(
+    "/{fabricacion_id}/validacion",
+    response_model=ValidacionResult,
+    responses={409: {"model": ValidacionError}},
+)
+async def validar(
+    fabricacion_id: UUID,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(require_roles(
+        "FABRICANTE", "GERENTE_FABRICACION"
+    )),
+    ) -> ValidacionResult | JSONResponse:
+
+    try:
+        fabricacion, faltantes = await service.validar(
+            fabricacion_id
+        )
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    if faltantes:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Materiales insuficientes para fabricar la orden",
+                "faltantes": faltantes,
+            },
+        )
+
+    return ValidacionResult(
+        mensaje="Materiales disponibles: la orden puede iniciar su fabricación",
+        id=fabricacion.id,
+        estado=fabricacion.estado,
+    )
 
 
 @router.patch("/{fabricacion_id}/inicio", response_model=FabricacionRead)

@@ -4,17 +4,27 @@ from app.core.config import settings
 
 
 class InventarioClient:
-    async def consultar_disponibilidad(self, referencia: str, formula: dict, cantidad: int) -> list[dict]:
+    async def consultar_disponibilidad(
+        self, codigo_material: str
+        ) -> dict:
+
         if settings.external_mode == "mock":
-            return []
-        async with httpx.AsyncClient(timeout=settings.external_timeout_seconds) as client:
+            return {
+                "disponible": 10000,
+                "unidadMedida": "g",
+            }
+
+        async with httpx.AsyncClient(
+            timeout=settings.external_timeout_seconds
+        ) as client:
+
             response = await client.get(
-                f"{settings.inventario_base_url}/inventario/{referencia}",
-                params={"cantidad": cantidad},
+                f"{settings.inventario_base_url}/inventario/{codigo_material}"
             )
+
             response.raise_for_status()
-            payload = response.json()
-            return payload.get("faltantes", [])
+
+            return response.json()
 
     async def descontar(
         self, fabricacion_id: str, referencia: str, formula: dict | None, cantidad: int

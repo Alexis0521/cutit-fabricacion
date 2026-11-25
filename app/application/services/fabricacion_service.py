@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.application.schemas.fabricacion_schema import FabricacionCreate
 from app.core.exceptions import DomainError
 from app.domain.entities.fabricacion import Fabricacion
+from app.domain.enums.estados import EstadoFabricacion
 from app.infrastructure.external.inventario_client import InventarioClient
 from app.infrastructure.external.materiales_client import MaterialesClient
 from app.infrastructure.repositories.fabricacion_repository import FabricacionRepository
@@ -26,14 +27,80 @@ class FabricacionService:
         entity = Fabricacion(**data.model_dump())
         return self.repo.save(entity)
 
-    async def validar(self, fabricacion_id: UUID) -> tuple[Fabricacion, list[dict]]:
-        entity = self._get(fabricacion_id)
-        faltantes = await self.inventario.consultar_disponibilidad(
-            entity.referencia_material, {}, entity.cantidad
-        )
+    async def validar(
+        self, fabricacion_id: UUID
+        ) -> tuple[Fabricacion, list[dict]]:
+
+        entity = self.repo.get(fabricacion_id)
+
+        if entity is None:
+            raise DomainError("No se encontró la orden", 404)
+
+        if entity.estado != EstadoFabricacion.REGISTRADA:
+            raise DomainError(
+                "Solo se pueden validar órdenes en estado Registrada",
+                409,
+            )
+
+        formula = await self.formula(fabricacion_id)
+
+        faltantes = []
+        requerimientos: dict[tuple[str, str], float] = {}
+
+        for insumo in formula["insumos"]:
+            codigo = insumo["codigoMaterial"]
+            unidad = insumo["unidadMedida"]
+
+            requerido = (
+                insumo["cantidadPorUnidad"] * entity.cantidad
+            )
+
+            clave = (codigo, unidad)
+
+            requerimientos[clave] = (
+                requerimientos.get(clave, 0) + requerido
+            )
+
+        for (codigo, unidad), requerido in requerimientos.items():
+
+            try:
+                stock = await self.inventario.consultar_disponibilidad(
+                    codigo
+                )
+
+                disponible = stock.get("disponible")
+
+                if (
+                    isinstance(disponible, bool)
+                    or not isinstance(disponible, (int, float))
+                    or disponible < 0
+                    or (
+                        isinstance(disponible, float)
+                        and not math.isfinite(disponible)
+                    )
+                    or stock.get("unidadMedida") != unidad
+                ):
+                    raise ValueError("Existencias o unidad inválidas")
+
+            except (httpx.HTTPError, ValueError, AttributeError) as exc:
+                raise DomainError(
+                    "El módulo de Inventario no está disponible por el momento",
+                    503,
+                ) from exc
+
+            if disponible < requerido:
+                faltantes.append({
+                    "codigoMaterial": codigo,
+                    "requerido": requerido,
+                    "disponible": disponible,
+                    "faltante": requerido - disponible,
+                })
+
         if faltantes:
             return entity, faltantes
+
         entity.validar()
+
         return self.repo.save(entity), []
 
     async def iniciar(self, fabricacion_id: UUID) -> Fabricacion:
@@ -61,10 +128,10 @@ class FabricacionService:
                 503
             ) from exc
 
-        except (httpx.RequestError, ValueError) as exc:
+        except Exception as exc:
             raise DomainError(
                 "El módulo de Materiales no está disponible por el momento",
-                503
+                503,
             ) from exc
 
         if not formula:

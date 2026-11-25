@@ -34,15 +34,20 @@ class FabricacionRead(BaseModel):
 
 
 class Faltante(BaseModel):
-    codigo: str
-    descripcion: str
+    codigoMaterial: str
     requerido: float
     disponible: float
-    diferencia: float
+    faltante: float
 
 
 class ValidacionResult(BaseModel):
-    disponible: bool
+    mensaje: str
+    id: UUID
+    estado: EstadoFabricacion
+
+
+class ValidacionError(BaseModel):
+    detail: str
     faltantes: list[Faltante]
 
 
