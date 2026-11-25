@@ -1,5 +1,5 @@
 from datetime import datetime
-from uuid import UUID
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,15 +11,31 @@ from app.domain.enums.estados import (
 
 
 class FabricacionCreate(BaseModel):
-    referencia_material: str = Field(min_length=1, max_length=100)
-    tipo_producto: TipoProducto
-    cantidad: int = Field(gt=0)
-    observaciones: str | None = Field(default=None, max_length=250)
+    """Entrada de POST /fabricaciones (HU_CSFAB_01).
+
+    Los campos son permisivos a propósito: las reglas de negocio y sus mensajes
+    exactos (422/409) se validan en `app.domain.validators`, no en Pydantic.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    tipo_producto: Any = Field(default=None, alias="tipoProducto")
+    referencia_material: Any = Field(default=None, alias="referenciaProducto")
+    cantidad: Any = None
+    especificaciones: Any = None
+    insumos_terceros: Any = Field(default=None, alias="insumosTerceros")
+    observaciones: Any = None
+
+
+class FabricacionRegistrada(BaseModel):
+    mensaje: str
+    id: str
+    estado: EstadoFabricacion
 
 
 class FabricacionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: UUID
+    id: str
     referencia_material: str
     tipo_producto: TipoProducto
     cantidad: int
@@ -31,6 +47,8 @@ class FabricacionRead(BaseModel):
     started_at: datetime | None
     closed_at: datetime | None
     sync_attempts: int
+    especificaciones: dict[str, Any]
+    insumos_terceros: list[dict[str, Any]]
 
 
 class Faltante(BaseModel):
@@ -42,7 +60,7 @@ class Faltante(BaseModel):
 
 class ValidacionResult(BaseModel):
     mensaje: str
-    id: UUID
+    id: str
     estado: EstadoFabricacion
 
 
@@ -56,6 +74,7 @@ class NotificacionCreate(BaseModel):
     tipo_producto: TipoProducto
     cantidad: int = Field(gt=0)
     observaciones: str | None = Field(default="Reposición por alerta de stock", max_length=250)
+    especificaciones: dict[str, Any] = Field(default_factory=dict)
 
 class InsumoFormula(BaseModel):
     codigoMaterial: str

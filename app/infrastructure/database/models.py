@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from uuid import uuid4
 
 from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy import Enum as SAEnum
@@ -16,7 +15,7 @@ from app.infrastructure.database.connection import Base
 class FabricacionModel(Base):
     __tablename__ = "fabricaciones"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
     referencia_material: Mapped[str] = mapped_column(String(100), nullable=False)
     tipo_producto: Mapped[TipoProducto] = mapped_column(SAEnum(TipoProducto), nullable=False)
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -29,3 +28,13 @@ class FabricacionModel(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sync_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    especificaciones: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    insumos_terceros: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class SecuenciaOrdenModel(Base):
+    """Contador atómico para generar los identificadores ORD-000123."""
+
+    __tablename__ = "fabricaciones_secuencia"
+
+    numero: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
