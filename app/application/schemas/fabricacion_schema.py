@@ -51,3 +51,14 @@ class NotificacionCreate(BaseModel):
     tipo_producto: TipoProducto
     cantidad: int = Field(gt=0)
     observaciones: str | None = Field(default="Reposición por alerta de stock", max_length=250)
+
+class InsumoFormula(BaseModel):
+    codigoMaterial: str
+    descripcion: str
+    cantidadPorUnidad: int | float
+    unidadMedida: str
+
+
+class FormulaRead(BaseModel):
+    referenciaProducto: str
+    insumos: list[InsumoFormula]

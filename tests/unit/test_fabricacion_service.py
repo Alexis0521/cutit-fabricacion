@@ -200,35 +200,141 @@ async def test_iniciar_propaga_error_de_entidad_si_no_esta_validada(make_service
 
 
 @pytest.mark.anyio
-async def test_formula_devuelve_snapshot_durante_fabricacion(make_service):
-    entity = make_fabricacion(
-        estado=EstadoFabricacion.EN_PROCESO,
-        formula_snapshot=FORMULA,
-    )
-    service, _, _, _ = make_service(entity)
+async def test_formula_devuelve_formula_vigente(make_service):
+    entity = make_fabricacion()
+    service, repository, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "estado": "APROBADA",
+        "version": "3",
+        "items": [
+            {
+                "codigo": "MP-001",
+                "descripcion": "Acero al carbono",
+                "cantidad": 250.5,
+                "unidad": "g",
+            }
+        ],
+    }
 
     result = await service.formula(entity.id)
 
-    assert result is FORMULA
+    assert result == {
+        "referenciaProducto": "MAT-1",
+        "insumos": [
+            {
+                "codigoMaterial": "MP-001",
+                "descripcion": "Acero al carbono",
+                "cantidadPorUnidad": 250.5,
+                "unidadMedida": "g",
+            }
+        ],
+    }
+
+    materiales.obtener_formula.assert_awaited_once_with("MAT-1")
+    repository.save.assert_not_called()
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+
+@pytest.mark.anyio
+async def test_formula_inexistente_devuelve_404(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.return_value = {}
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 404
+    assert error.value.message == (
+        "No existe una fórmula para esa referencia"
+    )
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("estado", "snapshot", "message"),
+    "formula",
     [
-        (EstadoFabricacion.REGISTRADA, FORMULA, "solo está disponible"),
-        (EstadoFabricacion.EN_PROCESO, None, "fórmula está incompleta"),
-        (EstadoFabricacion.CERRADA, {"version": "2"}, "fórmula está incompleta"),
+        {"items": []},
+        {"version": "2"},
+        {"items": "incorrecto"},
+        {"items": [None]},
+        {"items": [{"codigo": "MP-001"}]},
+        {"items": [{
+            "codigo": "",
+            "descripcion": "Acero",
+            "cantidad": 250,
+            "unidad": "g",
+        }]},
+        {"items": [{
+            "codigo": "MP-001",
+            "descripcion": "Acero",
+            "cantidad": -250,
+            "unidad": "g",
+        }]},
+        {"items": [{
+            "codigo": "MP-001",
+            "descripcion": "Acero",
+            "cantidad": True,
+            "unidad": "g",
+        }]},
     ],
 )
-async def test_formula_rechaza_estado_o_snapshot_incompleto(
-    make_service, estado, snapshot, message
-):
-    entity = make_fabricacion(estado=estado, formula_snapshot=snapshot)
-    service, _, _, _ = make_service(entity)
+async def test_formula_incompleta_devuelve_409(make_service, formula):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
 
-    with pytest.raises(DomainError, match=message):
+    materiales.obtener_formula.return_value = formula
+
+    with pytest.raises(DomainError) as error:
         await service.formula(entity.id)
+
+    assert error.value.status_code == 409
+    assert error.value.message == "La fórmula está incompleta"
+
+
+@pytest.mark.anyio
+async def test_formula_materiales_no_disponible(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    materiales.obtener_formula.side_effect = httpx.ConnectError(
+        "Servicio no disponible"
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 503
+    assert error.value.message == (
+        "El módulo de Materiales no está disponible por el momento"
+    )
+
+
+@pytest.mark.anyio
+async def test_formula_materiales_responde_404(make_service):
+    entity = make_fabricacion()
+    service, _, materiales, _ = make_service(entity)
+
+    request = httpx.Request(
+        "GET", "http://materiales/materiales/MAT-1"
+    )
+
+    response = httpx.Response(404, request=request)
+
+    materiales.obtener_formula.side_effect = httpx.HTTPStatusError(
+        "Fórmula no encontrada",
+        request=request,
+        response=response,
+    )
+
+    with pytest.raises(DomainError) as error:
+        await service.formula(entity.id)
+
+    assert error.value.status_code == 404
+    assert error.value.message == (
+        "No existe una fórmula para esa referencia"
+    )
 
 
 @pytest.mark.anyio

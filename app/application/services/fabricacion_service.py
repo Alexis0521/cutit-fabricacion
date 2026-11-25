@@ -1,3 +1,4 @@
+import math
 from uuid import UUID
 
 import httpx
@@ -43,12 +44,80 @@ class FabricacionService:
 
     async def formula(self, fabricacion_id: UUID) -> dict:
         entity = self._get(fabricacion_id)
-        if entity.estado.value not in {"En Proceso", "Cerrada"}:
-            raise DomainError("La fórmula solo está disponible durante o después de la fabricación", 409)
-        formula = entity.formula_snapshot
-        if not formula or not formula.get("items"):
+
+        try:
+            formula = await self.materiales.obtener_formula(
+                entity.referencia_material
+            )
+
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise DomainError(
+                    "No existe una fórmula para esa referencia", 404
+                ) from exc
+
+            raise DomainError(
+                "El módulo de Materiales no está disponible por el momento",
+                503
+            ) from exc
+
+        except (httpx.RequestError, ValueError) as exc:
+            raise DomainError(
+                "El módulo de Materiales no está disponible por el momento",
+                503
+            ) from exc
+
+        if not formula:
+            raise DomainError(
+                "No existe una fórmula para esa referencia", 404
+            )
+
+        if not isinstance(formula, dict):
             raise DomainError("La fórmula está incompleta", 409)
-        return formula
+
+        items = formula.get("items")
+
+        if not isinstance(items, list) or not items:
+            raise DomainError("La fórmula está incompleta", 409)
+
+        campos_texto = ["codigo", "descripcion", "unidad"]
+        insumos = []
+
+        for insumo in items:
+
+            if not isinstance(insumo, dict):
+                raise DomainError("La fórmula está incompleta", 409)
+
+            for campo in campos_texto:
+                valor = insumo.get(campo)
+
+                if not isinstance(valor, str) or not valor.strip():
+                    raise DomainError("La fórmula está incompleta", 409)
+
+            cantidad = insumo.get("cantidad")
+
+            if (
+                isinstance(cantidad, bool)
+                or not isinstance(cantidad, (int, float))
+                or cantidad <= 0
+                or (
+                    isinstance(cantidad, float)
+                    and not math.isfinite(cantidad)
+                )
+            ):
+                raise DomainError("La fórmula está incompleta", 409)
+
+            insumos.append({
+                "codigoMaterial": insumo["codigo"],
+                "descripcion": insumo["descripcion"],
+                "cantidadPorUnidad": cantidad,
+                "unidadMedida": insumo["unidad"]
+            })
+
+        return {
+            "referenciaProducto": entity.referencia_material,
+            "insumos": insumos
+        }
 
     async def cerrar(self, fabricacion_id: UUID) -> Fabricacion:
         entity = self._get(fabricacion_id)

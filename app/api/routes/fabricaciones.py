@@ -6,6 +6,7 @@ from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
+    FormulaRead,
     ValidacionResult,
 )
 from app.application.services.fabricacion_service import FabricacionService
@@ -34,9 +35,11 @@ async def iniciar(fabricacion_id: UUID, service: FabricacionService = Depends(ge
     return await service.iniciar(fabricacion_id)
 
 
-@router.get("/{fabricacion_id}/formula")
-async def formula(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> dict:
+@router.get("/{fabricacion_id}/formula", response_model=FormulaRead)
+async def formula(
+    fabricacion_id: UUID,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE")),) -> dict:
     return await service.formula(fabricacion_id)
 
 

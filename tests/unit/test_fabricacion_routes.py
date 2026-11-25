@@ -189,10 +189,27 @@ def test_iniciar_returns_service_conflict(api_client):
     assert response.json() == {"detail": "Solo se pueden iniciar órdenes Validadas"}
 
 
-def test_formula_returns_formula_snapshot(api_client):
+def test_formula_returns_current_formula(api_client):
     client, service = api_client
+
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE"
+    }
+
     entity_id = uuid4()
-    formula = {"version": "2", "items": [{"codigo": "ACERO", "cantidad": 10}]}
+
+    formula = {
+        "referenciaProducto": "MAT-1",
+        "insumos": [
+            {
+                "codigoMaterial": "MP-001",
+                "descripcion": "Acero",
+                "cantidadPorUnidad": 250.5,
+                "unidadMedida": "g",
+            }
+        ],
+    }
+
     service.formula.return_value = formula
 
     response = client.get(f"/fabricaciones/{entity_id}/formula")
@@ -204,6 +221,9 @@ def test_formula_returns_formula_snapshot(api_client):
 
 def test_formula_returns_service_conflict_for_unavailable_formula(api_client):
     client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {
+    "role": "FABRICANTE"
+    }
     entity_id = uuid4()
     service.formula.side_effect = DomainError("La fórmula está incompleta", 409)
 
