@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 import httpx
 
 from app.core.config import settings
@@ -14,12 +16,14 @@ class InventarioClient:
                 "unidadMedida": "g",
             }
 
+        codigo_codificado = quote(codigo_material, safe="")
+
         async with httpx.AsyncClient(
             timeout=settings.external_timeout_seconds
         ) as client:
 
             response = await client.get(
-                f"{settings.inventario_base_url}/inventario/{codigo_material}"
+                f"{settings.inventario_base_url}/inventario/{codigo_codificado}"
             )
 
             response.raise_for_status()

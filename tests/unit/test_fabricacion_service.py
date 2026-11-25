@@ -166,6 +166,59 @@ async def test_validar_con_faltantes_devuelve_la_entidad_sin_cambiarla(make_serv
 
 
 @pytest.mark.anyio
+async def test_validar_no_genera_faltantes_por_redondeo(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero",
+            "cantidad": 0.1,
+            "unidad": "g",
+        }]
+    }
+
+    inventario.consultar_disponibilidad.return_value = {
+        "disponible": 0.3,
+        "unidadMedida": "g",
+    }
+
+    result, faltantes = await service.validar(entity.id)
+
+    assert result is entity
+    assert faltantes == []
+    assert entity.estado == EstadoFabricacion.VALIDADA
+    repository.save.assert_called_once_with(entity)
+
+
+@pytest.mark.anyio
+async def test_validar_rechaza_cantidad_fuera_de_rango(make_service):
+    entity = make_fabricacion()
+
+    service, repository, materiales, inventario = make_service(entity)
+
+    materiales.obtener_formula.return_value = {
+        "items": [{
+            "codigo": "ACERO",
+            "descripcion": "Acero",
+            "cantidad": 1e308,
+            "unidad": "g",
+        }]
+    }
+
+    with pytest.raises(DomainError) as error:
+        await service.validar(entity.id)
+
+    assert error.value.status_code == 409
+    assert entity.estado == EstadoFabricacion.REGISTRADA
+
+    inventario.consultar_disponibilidad.assert_not_awaited()
+    repository.save.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_validar_sin_faltantes_transiciona_y_guarda_como_validada(make_service):
     entity = make_fabricacion()
 

@@ -1,4 +1,5 @@
 import math
+from decimal import Decimal
 from uuid import UUID
 
 import httpx
@@ -45,21 +46,28 @@ class FabricacionService:
         formula = await self.formula(fabricacion_id)
 
         faltantes = []
-        requerimientos: dict[tuple[str, str], float] = {}
+        requerimientos: dict[tuple[str, str], Decimal] = {}
 
         for insumo in formula["insumos"]:
             codigo = insumo["codigoMaterial"]
             unidad = insumo["unidadMedida"]
 
-            requerido = (
-                insumo["cantidadPorUnidad"] * entity.cantidad
+        requerido = (
+            Decimal(str(insumo["cantidadPorUnidad"]))
+            * entity.cantidad
+        )
+
+        clave = (codigo, unidad)
+
+        total = requerimientos.get(clave, Decimal(0)) + requerido
+
+        if not math.isfinite(float(total)):
+            raise DomainError(
+                "La cantidad requerida de material excede el límite permitido",
+                409,
             )
 
-            clave = (codigo, unidad)
-
-            requerimientos[clave] = (
-                requerimientos.get(clave, 0) + requerido
-            )
+        requerimientos[clave] = total
 
         for (codigo, unidad), requerido in requerimientos.items():
 
@@ -88,13 +96,15 @@ class FabricacionService:
                     503,
                 ) from exc
 
-            if disponible < requerido:
-                faltantes.append({
-                    "codigoMaterial": codigo,
-                    "requerido": requerido,
-                    "disponible": disponible,
-                    "faltante": requerido - disponible,
-                })
+            disponible_decimal = Decimal(str(disponible))
+
+        if disponible_decimal < requerido:
+            faltantes.append({
+                "codigoMaterial": codigo,
+                "requerido": float(requerido),
+                "disponible": float(disponible_decimal),
+                "faltante": float(requerido - disponible_decimal),
+            })
 
         if faltantes:
             return entity, faltantes

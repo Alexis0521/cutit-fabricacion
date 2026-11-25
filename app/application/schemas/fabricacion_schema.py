@@ -48,7 +48,7 @@ class ValidacionResult(BaseModel):
 
 class ValidacionError(BaseModel):
     detail: str
-    faltantes: list[Faltante]
+    faltantes: list[Faltante] | None = None
 
 
 class NotificacionCreate(BaseModel):
