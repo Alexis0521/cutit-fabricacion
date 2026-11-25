@@ -124,32 +124,109 @@ def test_registrar_maps_service_domain_error(api_client):
 
 def test_validar_returns_available_result(api_client):
     client, service = api_client
-    entity = make_fabricacion(estado=EstadoFabricacion.VALIDADA)
+
+    entity = make_fabricacion(
+        estado=EstadoFabricacion.VALIDADA
+    )
+
     service.validar.return_value = (entity, [])
 
-    response = client.post(f"/fabricaciones/{entity.id}/validacion")
+    response = client.post(
+        f"/fabricaciones/{entity.id}/validacion"
+    )
 
     assert response.status_code == 200
-    assert response.json() == {"disponible": True, "faltantes": []}
+
+    assert response.json() == {
+        "mensaje": "Materiales disponibles: la orden puede iniciar su fabricación",
+        "id": str(entity.id),
+        "estado": "Validada",
+    }
+
     service.validar.assert_awaited_once_with(entity.id)
 
 
 def test_validar_returns_missing_inventory_items(api_client):
     client, service = api_client
+
     entity = make_fabricacion()
+
     missing = {
-        "codigo": "ACERO",
-        "descripcion": "Acero",
-        "requerido": 10.0,
-        "disponible": 7.0,
-        "diferencia": 3.0,
+        "codigoMaterial": "MP-001",
+        "requerido": 5000,
+        "disponible": 3200,
+        "faltante": 1800,
     }
+
     service.validar.return_value = (entity, [missing])
 
-    response = client.post(f"/fabricaciones/{entity.id}/validacion")
+    response = client.post(
+        f"/fabricaciones/{entity.id}/validacion"
+    )
 
-    assert response.status_code == 200
-    assert response.json() == {"disponible": False, "faltantes": [missing]}
+    assert response.status_code == 409
+
+    assert response.json() == {
+        "detail": "Materiales insuficientes para fabricar la orden",
+        "faltantes": [missing],
+    }
+
+
+def test_validar_rechaza_estado_incorrecto(api_client):
+    client, service = api_client
+
+    service.validar.side_effect = DomainError(
+        "Solo se pueden validar órdenes en estado Registrada",
+        409,
+    )
+
+    response = client.post(
+        f"/fabricaciones/{uuid4()}/validacion"
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Solo se pueden validar órdenes en estado Registrada"
+    }
+
+
+@pytest.mark.parametrize(
+    "modulo",
+    ["Materiales", "Inventario"],
+)
+def test_validar_modulo_no_disponible(api_client, modulo):
+    client, service = api_client
+
+    mensaje = (
+        f"El módulo de {modulo} no está disponible por el momento"
+    )
+
+    service.validar.side_effect = DomainError(mensaje, 503)
+
+    response = client.post(
+        f"/fabricaciones/{uuid4()}/validacion"
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": mensaje}
+
+
+def test_validar_error_inesperado(api_client):
+    client, service = api_client
+
+    service.validar.side_effect = RuntimeError(
+        "Error inesperado"
+    )
+
+    response = client.post(
+        f"/fabricaciones/{uuid4()}/validacion"
+    )
+
+    assert response.status_code == 500
+
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
 
 
 def test_validar_maps_missing_fabricacion_to_404(api_client):
@@ -189,10 +266,27 @@ def test_iniciar_returns_service_conflict(api_client):
     assert response.json() == {"detail": "Solo se pueden iniciar órdenes Validadas"}
 
 
-def test_formula_returns_formula_snapshot(api_client):
+def test_formula_returns_current_formula(api_client):
     client, service = api_client
+
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE"
+    }
+
     entity_id = uuid4()
-    formula = {"version": "2", "items": [{"codigo": "ACERO", "cantidad": 10}]}
+
+    formula = {
+        "referenciaProducto": "MAT-1",
+        "insumos": [
+            {
+                "codigoMaterial": "MP-001",
+                "descripcion": "Acero",
+                "cantidadPorUnidad": 250.5,
+                "unidadMedida": "g",
+            }
+        ],
+    }
+
     service.formula.return_value = formula
 
     response = client.get(f"/fabricaciones/{entity_id}/formula")
@@ -204,6 +298,9 @@ def test_formula_returns_formula_snapshot(api_client):
 
 def test_formula_returns_service_conflict_for_unavailable_formula(api_client):
     client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {
+    "role": "FABRICANTE"
+    }
     entity_id = uuid4()
     service.formula.side_effect = DomainError("La fórmula está incompleta", 409)
 
@@ -337,5 +434,94 @@ def test_endpoint_enforces_role_permissions(api_client):
     response = client.post(f"/fabricaciones/{uuid4()}/sincronizacion")
 
     assert response.status_code == 403
-    assert response.json() == {"detail": "Permisos insuficientes"}
+    assert response.json() == {
+        "detail": "No tiene autorización para realizar esta operación"
+    }
     service.sincronizar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+    ],
+)
+def test_hu03_hu04_rechazan_acceso_sin_credenciales(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{uuid4()}/{endpoint}",
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Acceso no autorizado"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+    ],
+)
+def test_hu03_hu04_rechazan_token_invalido(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides.pop(current_user, None)
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{uuid4()}/{endpoint}",
+        headers={"Authorization": "Bearer token-invalido"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Acceso no autorizado"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "formula"),
+        ("POST", "validacion"),
+    ],
+)
+def test_hu03_hu04_rechazan_rol_no_autorizado(
+    api_client, method, endpoint
+):
+    client, service = api_client
+
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "SIN_PERMISOS"
+    }
+
+    response = client.request(
+        method,
+        f"/fabricaciones/{uuid4()}/{endpoint}",
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "No tiene autorización para realizar esta operación"
+    }
+
+    service.formula.assert_not_awaited()
+    service.validar.assert_not_awaited()

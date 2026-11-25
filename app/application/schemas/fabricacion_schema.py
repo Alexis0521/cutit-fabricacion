@@ -34,16 +34,21 @@ class FabricacionRead(BaseModel):
 
 
 class Faltante(BaseModel):
-    codigo: str
-    descripcion: str
+    codigoMaterial: str
     requerido: float
     disponible: float
-    diferencia: float
+    faltante: float
 
 
 class ValidacionResult(BaseModel):
-    disponible: bool
-    faltantes: list[Faltante]
+    mensaje: str
+    id: UUID
+    estado: EstadoFabricacion
+
+
+class ValidacionError(BaseModel):
+    detail: str
+    faltantes: list[Faltante] | None = None
 
 
 class NotificacionCreate(BaseModel):
@@ -51,3 +56,14 @@ class NotificacionCreate(BaseModel):
     tipo_producto: TipoProducto
     cantidad: int = Field(gt=0)
     observaciones: str | None = Field(default="Reposición por alerta de stock", max_length=250)
+
+class InsumoFormula(BaseModel):
+    codigoMaterial: str
+    descripcion: str
+    cantidadPorUnidad: int | float
+    unidadMedida: str
+
+
+class FormulaRead(BaseModel):
+    referenciaProducto: str
+    insumos: list[InsumoFormula]

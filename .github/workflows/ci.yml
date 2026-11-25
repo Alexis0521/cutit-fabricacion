@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Descargar codigo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -37,7 +39,43 @@ jobs:
         run: mypy --disallow-untyped-defs app
 
       - name: Ejecutar pruebas y medir cobertura
-        run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+        run: python -m pytest --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=80
 
       - name: Construir imagen Docker
         run: docker build -t cutit-fabricacion .
+
+      - name: Login en Docker Hub
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Construir y publicar imagen Docker
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            alexis2105/cutit-fabricacion:latest
+            alexis2105/cutit-fabricacion:${{ github.sha }}
+
+      - name: Analizar codigo con SonarQube Cloud 
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: SonarSource/sonarqube-scan-action@70bad232163b09d998ea0707ee80c0ec80798c16 # v8.5.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      
+  deploy-production:
+    name: Deploy to AWS EC2
+    runs-on: self-hosted
+    needs: quality-and-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Actualizar API en EC2
+        run: |
+          cd /home/ubuntu/cutit-fabricacion-repo
+          docker compose pull api
+          docker compose up -d --no-deps api
