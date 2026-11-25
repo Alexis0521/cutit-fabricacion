@@ -20,12 +20,19 @@ class FabricacionService:
         self.materiales = MaterialesClient()
         self.inventario = InventarioClient()
 
-    async def registrar(self, data: FabricacionCreate) -> Fabricacion:
+    async def registrar(
+        self,
+        data: FabricacionCreate,
+        fabricante_id: str | None = None,
+    ) -> Fabricacion:
         material = await self.materiales.obtener_material(data.referencia_material)
         formula = material.get("formula") or {}
         if formula.get("estado") != "APROBADA":
             raise DomainError("La fórmula del material no está aprobada", 409)
-        entity = Fabricacion(**data.model_dump())
+        entity = Fabricacion(
+            **data.model_dump(),
+            fabricante_id=fabricante_id,
+        )
         return self.repo.save(entity)
 
     async def validar(
@@ -113,9 +120,56 @@ class FabricacionService:
 
         return self.repo.save(entity), []
 
-    async def iniciar(self, fabricacion_id: UUID) -> Fabricacion:
+    async def iniciar(
+        self, fabricacion_id: UUID, usuario: dict[str, object]
+    ) -> Fabricacion:
         entity = self._get(fabricacion_id)
-        formula = await self.materiales.obtener_formula(entity.referencia_material)
+
+        rol = usuario.get("role")
+        if rol == "FABRICANTE":
+            usuario_id = usuario.get("sub")
+            if (
+                not isinstance(usuario_id, str)
+                or usuario_id != entity.fabricante_id
+            ):
+                raise DomainError(
+                    "Solo el fabricante asignado puede iniciar esta orden",
+                    403,
+                )
+        elif rol != "GERENTE_FABRICACION":
+            raise DomainError(
+                "No tiene autorización para iniciar esta orden",
+                403,
+            )
+
+        if entity.estado != EstadoFabricacion.VALIDADA:
+            raise DomainError(
+                "Solo se pueden iniciar órdenes Validadas",
+                409,
+            )
+
+        try:
+            formula = await self.materiales.obtener_formula(
+                entity.referencia_material
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise DomainError(
+                    "No existe una fórmula para esa referencia",
+                    404,
+                ) from exc
+
+            raise DomainError(
+                "El módulo de Materiales no está disponible por el momento",
+                503,
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            raise DomainError(
+                "El módulo de Materiales no está disponible por el momento",
+                503,
+            ) from exc
+
         entity.iniciar(formula)
         return self.repo.save(entity)
 

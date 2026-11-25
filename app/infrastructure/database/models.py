@@ -21,6 +21,7 @@ class FabricacionModel(Base):
     tipo_producto: Mapped[TipoProducto] = mapped_column(SAEnum(TipoProducto), nullable=False)
     cantidad: Mapped[int] = mapped_column(Integer, nullable=False)
     observaciones: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    fabricante_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     estado: Mapped[EstadoFabricacion] = mapped_column(SAEnum(EstadoFabricacion), nullable=False)
     sincronizacion: Mapped[EstadoSincronizacion] = mapped_column(SAEnum(EstadoSincronizacion), nullable=False)
     formula_version: Mapped[str | None] = mapped_column(String(100), nullable=True)

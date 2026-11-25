@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_fabricacion_service
@@ -8,6 +8,7 @@ from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
     FormulaRead,
+    InicioResult,
     ValidacionError,
     ValidacionResult,
 )
@@ -21,8 +22,21 @@ router = APIRouter(prefix="/fabricaciones", tags=["Fabricaciones"])
 
 @router.post("", response_model=FabricacionRead, status_code=201)
 async def registrar(data: FabricacionCreate, service: FabricacionService = Depends(get_fabricacion_service),
-                    _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
-    return await service.registrar(data)
+                    usuario: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
+    fabricante_id = None
+    if usuario.get("role") == "FABRICANTE":
+        identidad_fabricante = usuario.get("sub")
+        if (
+            not isinstance(identidad_fabricante, str)
+            or not identidad_fabricante.strip()
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="El token no identifica al fabricante",
+            )
+        fabricante_id = identidad_fabricante
+
+    return await service.registrar(data, fabricante_id=fabricante_id)
 
 
 @router.post(
@@ -68,10 +82,30 @@ async def validar(
     )
 
 
-@router.patch("/{fabricacion_id}/inicio", response_model=FabricacionRead)
-async def iniciar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
-                  _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
-    return await service.iniciar(fabricacion_id)
+@router.patch("/{fabricacion_id}/inicio", response_model=InicioResult)
+async def iniciar(
+    fabricacion_id: UUID,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    usuario: dict = Depends(
+        require_roles("FABRICANTE", "GERENTE_FABRICACION")
+    ),
+) -> InicioResult:
+    try:
+        fabricacion = await service.iniciar(fabricacion_id, usuario)
+
+    except DomainError:
+        raise
+
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde",
+            500,
+        ) from exc
+
+    return InicioResult(
+        **FabricacionRead.model_validate(fabricacion).model_dump(),
+        mensaje="La orden quedó en producción",
+    )
 
 
 @router.get("/{fabricacion_id}/formula", response_model=FormulaRead)

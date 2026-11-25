@@ -16,6 +16,7 @@ class Fabricacion:
     tipo_producto: TipoProducto
     cantidad: int
     observaciones: str | None = None
+    fabricante_id: str | None = None
     id: UUID = field(default_factory=uuid4)
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE
@@ -40,7 +41,7 @@ class Fabricacion:
     def iniciar(self, formula: dict) -> None:
         if self.estado != EstadoFabricacion.VALIDADA:
             raise DomainError("Solo se pueden iniciar órdenes Validadas")
-        if not formula or not formula.get("version"):
+        if not isinstance(formula, dict) or not formula.get("version"):
             raise DomainError("La fórmula está incompleta", 409)
         if formula.get("estado") != "APROBADA":
             raise DomainError("La fórmula ya no está aprobada", 409)

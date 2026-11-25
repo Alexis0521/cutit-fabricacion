@@ -35,6 +35,7 @@ def make_fabricacion(
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA,
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE,
     formula_snapshot: dict | None = None,
+    fabricante_id: str | None = None,
 ) -> Fabricacion:
     return Fabricacion(
         referencia_material="MAT-1",
@@ -46,6 +47,7 @@ def make_fabricacion(
         sincronizacion=sincronizacion,
         formula_version="2" if formula_snapshot else None,
         formula_snapshot=formula_snapshot,
+        fabricante_id=fabricante_id,
     )
 
 
@@ -89,6 +91,71 @@ def test_registrar_returns_created_fabricacion(api_client):
         **payload,
         "tipo_producto": TipoProducto.CADENA,
     }
+
+
+def test_registrar_assigns_order_to_authenticated_manufacturer(api_client):
+    client, service = api_client
+    service.registrar.return_value = make_fabricacion(fabricante_id="fab-1")
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-1",
+    }
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+            "fabricante_id": "fab-otro",
+        },
+    )
+
+    assert response.status_code == 201
+    assert service.registrar.await_args.args[0].model_dump().get(
+        "fabricante_id"
+    ) is None
+    assert service.registrar.await_args.kwargs["fabricante_id"] == "fab-1"
+
+
+def test_gerente_cannot_assign_unverified_manufacturer_when_registering(api_client):
+    client, service = api_client
+    service.registrar.return_value = make_fabricacion()
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+            "fabricante_id": "fab-1",
+        },
+    )
+
+    assert response.status_code == 201
+    assert service.registrar.await_args.args[0].model_dump().get(
+        "fabricante_id"
+    ) is None
+    assert service.registrar.await_args.kwargs["fabricante_id"] is None
+
+
+def test_manufacturer_without_subject_cannot_register_order(api_client):
+    client, service = api_client
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE"
+    }
+
+    response = client.post(
+        "/fabricaciones",
+        json={
+            "referencia_material": "MAT-1",
+            "tipo_producto": "Cadena",
+            "cantidad": 3,
+        },
+    )
+
+    assert response.status_code == 403
+    service.registrar.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -251,8 +318,14 @@ def test_iniciar_returns_updated_fabricacion(api_client):
     response = client.patch(f"/fabricaciones/{entity.id}/inicio")
 
     assert response.status_code == 200
-    assert response.json() == fabricacion_json(entity)
-    service.iniciar.assert_awaited_once_with(entity.id)
+    assert response.json() == {
+        **fabricacion_json(entity),
+        "mensaje": "La orden quedó en producción",
+    }
+    service.iniciar.assert_awaited_once_with(
+        entity.id,
+        {"role": "GERENTE_FABRICACION"},
+    )
 
 
 def test_iniciar_returns_service_conflict(api_client):
@@ -264,6 +337,64 @@ def test_iniciar_returns_service_conflict(api_client):
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Solo se pueden iniciar órdenes Validadas"}
+
+
+def test_iniciar_maps_missing_order_to_404(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = DomainError("Fabricación no encontrada", 404)
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Fabricación no encontrada"}
+
+
+def test_iniciar_maps_materiales_unavailable_to_503(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = DomainError(
+        "El módulo de Materiales no está disponible por el momento",
+        503,
+    )
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "El módulo de Materiales no está disponible por el momento"
+    }
+
+
+def test_iniciar_maps_unexpected_error_to_500(api_client):
+    client, service = api_client
+    service.iniciar.side_effect = RuntimeError("Error interno")
+
+    response = client.patch(f"/fabricaciones/{uuid4()}/inicio")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "La operación no pudo completarse, intente nuevamente más tarde"
+    }
+
+
+def test_iniciar_rechaza_fabricante_no_asignado(api_client):
+    client, service = api_client
+    entity_id = uuid4()
+    app.dependency_overrides[current_user] = lambda: {
+        "role": "FABRICANTE",
+        "sub": "fab-2",
+    }
+    service.iniciar.side_effect = DomainError(
+        "Solo el fabricante asignado puede iniciar esta orden",
+        403,
+    )
+
+    response = client.patch(f"/fabricaciones/{entity_id}/inicio")
+
+    assert response.status_code == 403
+    service.iniciar.assert_awaited_once_with(
+        entity_id,
+        {"role": "FABRICANTE", "sub": "fab-2"},
+    )
 
 
 def test_formula_returns_current_formula(api_client):
@@ -445,6 +576,7 @@ def test_endpoint_enforces_role_permissions(api_client):
     [
         ("GET", "formula"),
         ("POST", "validacion"),
+        ("PATCH", "inicio"),
     ],
 )
 def test_hu03_hu04_rechazan_acceso_sin_credenciales(
@@ -466,6 +598,7 @@ def test_hu03_hu04_rechazan_acceso_sin_credenciales(
 
     service.formula.assert_not_awaited()
     service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -473,6 +606,7 @@ def test_hu03_hu04_rechazan_acceso_sin_credenciales(
     [
         ("GET", "formula"),
         ("POST", "validacion"),
+        ("PATCH", "inicio"),
     ],
 )
 def test_hu03_hu04_rechazan_token_invalido(
@@ -495,6 +629,7 @@ def test_hu03_hu04_rechazan_token_invalido(
 
     service.formula.assert_not_awaited()
     service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -502,6 +637,7 @@ def test_hu03_hu04_rechazan_token_invalido(
     [
         ("GET", "formula"),
         ("POST", "validacion"),
+        ("PATCH", "inicio"),
     ],
 )
 def test_hu03_hu04_rechazan_rol_no_autorizado(
@@ -525,3 +661,4 @@ def test_hu03_hu04_rechazan_rol_no_autorizado(
 
     service.formula.assert_not_awaited()
     service.validar.assert_not_awaited()
+    service.iniciar.assert_not_awaited()

@@ -33,6 +33,10 @@ class FabricacionRead(BaseModel):
     sync_attempts: int
 
 
+class InicioResult(FabricacionRead):
+    mensaje: str
+
+
 class Faltante(BaseModel):
     codigoMaterial: str
     requerido: float
