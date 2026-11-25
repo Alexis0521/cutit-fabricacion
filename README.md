@@ -17,9 +17,18 @@ Implementa el flujo básico de registro, validación, inicio, consulta de fórmu
 1. Copia `.env.example` a `.env`.
 2. Completa las variables obligatorias. Para Docker Compose también define `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD`.
 3. Ejecuta `docker compose up --build`.
-4. Consulta la documentación interactiva de FastAPI en `/docs`.
+4. Consulta la documentación interactiva de FastAPI en `http://localhost:8000/docs`.
+5. Token JWT: `docker compose exec api python -c "import os,jwt,time; print(jwt.encode({'sub':'usuario-prueba','role':'FABRICANTE','exp':int(time.time())+3600}, os.environ['JWT_SECRET'], algorithm=os.getenv('JWT_ALGORITHM','HS256')))"`
 
 Los puertos y credenciales se configuran mediante variables de entorno; no se deben reutilizar los valores de ejemplo en producción.
+
+## Ejecución de pruebas y validación de calidad
+
+1. Ejecuta las pruebas automatizadas: `py -m pytest`.
+2. Genera el reporte de cobertura: `py -m pytest --cov=app --cov-report=term-missing`.
+3. Ejecuta el análisis estático con Ruff: `py -m ruff check app tests`.
+4. Verifica los tipos con Mypy: `py -m mypy --disallow-untyped-defs app`.
+5. Ejecutar todas las comprobaciones de cobertura, incluyendo el mínimo del 80 %: `py -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80`
 
 ## Modo mock
 
