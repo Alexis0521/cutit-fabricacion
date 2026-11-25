@@ -19,4 +19,4 @@ async def desde_notificacion(data: NotificacionCreate, x_api_key: str = Header()
 
     fabricacion_data = FabricacionCreate.model_validate(data.model_dump())
     with SessionLocal() as db:
-        return await FabricacionService(db).registrar(fabricacion_data)
+        return await FabricacionService(db).registrar(fabricacion_data, desde_notificacion=True)

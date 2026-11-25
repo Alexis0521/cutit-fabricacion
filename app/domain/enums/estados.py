@@ -17,3 +17,10 @@ class EstadoSincronizacion(str, Enum):
 class TipoProducto(str, Enum):
     CADENA = "Cadena"
     CUCHILLA = "Cuchilla"
+
+
+class EstadoFormula(str, Enum):
+    BORRADOR = "BORRADOR"
+    EVALUANDO_PATENTE = "EVALUANDO_PATENTE"
+    APROBADA = "APROBADA"
+    RECHAZADA_POR_INFRACCION = "RECHAZADA_POR_INFRACCION"
