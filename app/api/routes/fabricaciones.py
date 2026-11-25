@@ -1,12 +1,13 @@
-from uuid import UUID
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_fabricacion_service
 from app.application.schemas.fabricacion_schema import (
     FabricacionCreate,
     FabricacionRead,
+    FabricacionRegistrada,
     FormulaRead,
     ValidacionError,
     ValidacionResult,
@@ -18,11 +19,28 @@ from app.domain.entities.fabricacion import Fabricacion
 
 router = APIRouter(prefix="/fabricaciones", tags=["Fabricaciones"])
 
+OrdenId = Annotated[str, Path(pattern=r"^ORD-\d{6,}$", description="Ej.: ORD-000123")]
 
-@router.post("", response_model=FabricacionRead, status_code=201)
-async def registrar(data: FabricacionCreate, service: FabricacionService = Depends(get_fabricacion_service),
-                    _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
-    return await service.registrar(data)
+
+@router.post("", response_model=FabricacionRegistrada, status_code=201)
+async def registrar(
+    data: FabricacionCreate,
+    service: FabricacionService = Depends(get_fabricacion_service),
+    _: dict = Depends(require_roles("FABRICANTE")),
+) -> FabricacionRegistrada:
+    try:
+        entity = await service.registrar(data)
+    except DomainError:
+        raise
+    except Exception as exc:
+        raise DomainError(
+            "La operación no pudo completarse, intente nuevamente más tarde", 500
+        ) from exc
+    return FabricacionRegistrada(
+        mensaje="Orden de fabricación registrada correctamente",
+        id=entity.id,
+        estado=entity.estado,
+    )
 
 
 @router.post(
@@ -31,7 +49,7 @@ async def registrar(data: FabricacionCreate, service: FabricacionService = Depen
     responses={409: {"model": ValidacionError}},
 )
 async def validar(
-    fabricacion_id: UUID,
+    fabricacion_id: OrdenId,
     service: FabricacionService = Depends(get_fabricacion_service),
     _: dict = Depends(require_roles(
         "FABRICANTE", "GERENTE_FABRICACION"
@@ -69,27 +87,27 @@ async def validar(
 
 
 @router.patch("/{fabricacion_id}/inicio", response_model=FabricacionRead)
-async def iniciar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def iniciar(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                   _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION"))) -> Fabricacion:
     return await service.iniciar(fabricacion_id)
 
 
 @router.get("/{fabricacion_id}/formula", response_model=FormulaRead)
 async def formula(
-    fabricacion_id: UUID,
+    fabricacion_id: OrdenId,
     service: FabricacionService = Depends(get_fabricacion_service),
     _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE")),) -> dict:
     return await service.formula(fabricacion_id)
 
 
 @router.post("/{fabricacion_id}/cierre", response_model=FabricacionRead)
-async def cerrar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def cerrar(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                  _: dict = Depends(require_roles("GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> Fabricacion:
     return await service.cerrar(fabricacion_id)
 
 
 @router.post("/{fabricacion_id}/sincronizacion", response_model=FabricacionRead)
-async def sincronizar(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def sincronizar(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                       _: dict = Depends(require_roles("GERENTE_FABRICACION"))) -> Fabricacion:
     return await service.sincronizar(fabricacion_id)
 
@@ -104,6 +122,6 @@ async def listar(page: int = Query(default=1, ge=1), estado: str | None = None,
 
 
 @router.get("/{fabricacion_id}", response_model=FabricacionRead)
-async def detalle(fabricacion_id: UUID, service: FabricacionService = Depends(get_fabricacion_service),
+async def detalle(fabricacion_id: OrdenId, service: FabricacionService = Depends(get_fabricacion_service),
                   _: dict = Depends(require_roles("FABRICANTE", "GERENTE_FABRICACION", "ENCARGADO_ENSAMBLAJE"))) -> Fabricacion:
     return service.obtener(fabricacion_id)

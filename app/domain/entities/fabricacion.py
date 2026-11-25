@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
 
 from app.core.exceptions import DomainError
 from app.domain.enums.estados import (
@@ -16,7 +15,7 @@ class Fabricacion:
     tipo_producto: TipoProducto
     cantidad: int
     observaciones: str | None = None
-    id: UUID = field(default_factory=uuid4)
+    id: str = ""  # lo asigna el repositorio al guardar (formato ORD-000123)
     estado: EstadoFabricacion = EstadoFabricacion.REGISTRADA
     sincronizacion: EstadoSincronizacion = EstadoSincronizacion.PENDIENTE
     formula_version: str | None = None
@@ -25,6 +24,8 @@ class Fabricacion:
     started_at: datetime | None = None
     closed_at: datetime | None = None
     sync_attempts: int = 0
+    especificaciones: dict = field(default_factory=dict)
+    insumos_terceros: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.cantidad <= 0:
